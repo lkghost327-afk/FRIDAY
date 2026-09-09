@@ -1,0 +1,29 @@
+# Credentials and private state
+.env
+.env.*
+!.env.example
+settings.json
+memory.json
+user_profile.json
+price_watchlist.json
+data/
+*.log
+.cache
+speech_*.mp3
+speech_*.wav
+# Dependencies, caches and build products
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.exe
+*.spec
+# Editor and OS files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+.DS_Store
