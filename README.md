@@ -2,7 +2,7 @@
 
 FRIDAY is an independent Iron Man fan desktop assistant for Windows, with conversation, spoken replies, local wake detection and PC commands.
 
-**[Download FRIDAY.exe](https://github.com/lkghost327-afk/FRIDAY/releases/latest/download/FRIDAY.exe)** · [All releases](https://github.com/lkghost327-afk/FRIDAY/releases) · [Batman fans: ALFRED](https://github.com/lkghost327-afk/ALFRED)
+**[Setup instructions](#start)** · [Build FRIDAY.exe](#validation-and-build) · [Batman fans: ALFRED](https://github.com/lkghost327-afk/ALFRED)
 
 - Ask questions by text or voice and hear replies as sentences become ready.
 - Say “Friday” to activate the assistant, with a small animated blue indicator.
@@ -11,7 +11,7 @@ FRIDAY is an independent Iron Man fan desktop assistant for Windows, with conver
 
 ## Start
 
-**Using the EXE:** double-click **FRIDAY.exe**. Python and Setup.bat are not required for the packaged app. Open **Settings** to add your own Groq API key and choose a microphone. Keep the EXE in a permanent folder before enabling Windows startup.
+**Using a built EXE:** double-click **FRIDAY.exe**. Python and Setup.bat are not required for the packaged app. To build it from this repository, follow [Validation and build](#validation-and-build). Open **Settings** to add your own Groq API key and choose a microphone. Keep the EXE in a permanent folder before enabling Windows startup.
 
 **Running from source:**
 
@@ -89,4 +89,4 @@ python -m pip install -r requirements-build.txt
 python build_exe.py
 ```
 
-This repository contains source, setup scripts and tests. Download binaries from Releases; runtime environments, private data and keys stay outside the repository. The separate small English model uses Apache 2.0; see [Vosk models](https://alphacephei.com/vosk/models). This fan project is not affiliated with Marvel.
+This repository contains source, setup scripts and tests. Build.bat generates the EXE locally; runtime environments, private data and keys stay outside the repository. The separate small English model uses Apache 2.0; see [Vosk models](https://alphacephei.com/vosk/models). This fan project is not affiliated with Marvel.
