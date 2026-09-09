@@ -2,6 +2,13 @@
 
 FRIDAY is an independent Iron Man fan desktop assistant for Windows, with conversation, spoken replies, local wake detection and PC commands.
 
+**[Download FRIDAY.exe](https://github.com/lkghost327-afk/FRIDAY/releases/latest/download/FRIDAY.exe)** · [All releases](https://github.com/lkghost327-afk/FRIDAY/releases) · [Batman fans: ALFRED](https://github.com/lkghost327-afk/ALFRED)
+
+- Ask questions by text or voice and hear replies as sentences become ready.
+- Say “Friday” to activate the assistant, with a small animated blue indicator.
+- Open installed apps, request normal app closure, adjust volume and brightness, and manage reminders.
+- Keep FRIDAY in the tray and optionally start it when you sign in to Windows.
+
 ## Start
 
 **Using the EXE:** double-click **FRIDAY.exe**. Python and Setup.bat are not required for the packaged app. Open **Settings** to add your own Groq API key and choose a microphone. Keep the EXE in a permanent folder before enabling Windows startup.
@@ -19,7 +26,7 @@ The wake switch is remembered. It defaults to off for a fresh installation. Run 
 
 Use **Hide to tray**, minimize, or close the window to keep it running. **Background.bat** starts in the tray. Launching again restores the existing window instead of starting another listener.
 
-The tray menu has **Show**, speech mute, wake toggle and **Exit**. **Ctrl+Q** exits from the main window. A small blue FRIDAY indicator (gold for Alfred) pulses when the name is detected, changes during processing/speech, and fades after the exchange. Temporary microphone failures retry automatically.
+The tray menu has **Show**, speech mute, wake toggle and **Exit**. **Ctrl+Q** exits from the main window. A small blue indicator pulses when FRIDAY is detected, changes during processing/speech, and fades after the exchange. Temporary microphone failures retry automatically.
 
 In **Settings → Startup**, enable **Start with Windows** and click **Save** to launch quietly in the tray each time you sign in. Turn the switch off and save to remove automatic startup. This setting defaults to off and is independent for FRIDAY and ALFRED. Enable **Wake word** in the main window if you want voice activation after sign-in; that preference is remembered too.
 
@@ -43,7 +50,7 @@ Reminders run while the app is open; overdue reminders appear on the next launch
 
 Replies stream into complete spoken sentences. Upcoming sentences render while the current sentence plays. Full replies stay onscreen; very long answers use a bounded spoken excerpt. **Esc** or **Stop** interrupts.
 
-FRIDAY defaults to Emma neural speech; Emily offers an Irish accent, and Sonia a British accent. Alfred defaults to Ryan. Optional **Groq expressive voice** may require accepting the Orpheus model terms in your Groq account. Edge is the fallback, followed by Windows speech if online speech fails. This is not an exact reproduction of a film voice.
+FRIDAY defaults to Emma neural speech; Emily offers an Irish accent, and Sonia a British accent. Optional **Groq expressive voice** may require accepting the Orpheus model terms in your Groq account. Edge is the fallback, followed by Windows speech if online speech fails. This is not an exact reproduction of a film voice.
 
 The local Vosk detector listens for the name without uploading idle room audio. Activated requests use online transcription. If the local model is missing, the app announces online wake fallback; rerun Setup to install the model. The app pauses capture while answering/speaking to avoid hearing itself, then allows 15 seconds of follow-up listening. Accuracy depends on the microphone, room noise and accent.
 
@@ -60,6 +67,8 @@ Settings saves your Groq key there in `.env`. Advanced users can use `.env.examp
 Runtime environments and the wake model also live under Windows app data. This folder is independent of the other assistant's source.
 
 ## Validation and build
+
+The current release passed **111 automated tests**, a packaged background launch check and a live AI connection check. See [validation results and known limits](docs/VALIDATION.md) and the [architecture guide](docs/ARCHITECTURE.md).
 
 **Test.bat** runs regression tests with mocked device/network actions. **Check.bat** checks dependencies and makes a small live AI request. **Build.bat** creates:
 
@@ -80,4 +89,4 @@ python -m pip install -r requirements-build.txt
 python build_exe.py
 ```
 
-Upload this folder's contents to a GitHub repository root. It contains source, setup scripts and tests; binaries, runtime environments, private data and keys stay outside it. The separate small English model uses Apache 2.0; see [Vosk models](https://alphacephei.com/vosk/models). This fan project is not affiliated with Marvel or DC.
+This repository contains source, setup scripts and tests. Download binaries from Releases; runtime environments, private data and keys stay outside the repository. The separate small English model uses Apache 2.0; see [Vosk models](https://alphacephei.com/vosk/models). This fan project is not affiliated with Marvel.
