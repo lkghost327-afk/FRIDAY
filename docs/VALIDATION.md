@@ -2,6 +2,8 @@
 
 ## 9 September 2026: Windows startup and EXE release
 
+- Before release publishing, both Windows x64 EXEs also passed an isolated first-user background UI launch with no API key, no local wake model, and Python removed from PATH. The temporary app-data folders were used and no bundled credential file appeared. These checks ran on the development PC, not a separate clean Windows installation.
+
 - 111 automated tests passed independently in each repository using Python 3.12.
 - Both rebuilt EXEs passed dependency/live AI checks and background UI smoke launches with exit code 0. All 16 packaged core modules in each EXE were compared with the final source and matched, including the startup module. The tested copies are in the Desktop `Fan Assistants Releases` folder.
 - Startup tests exercised the real Windows registry API under isolated temporary test keys, covering enable/disable, independent persona entries, repeated disabling, moved launchers, removed entries and permission errors. Tests never registered either assistant in the actual Windows Run key.
