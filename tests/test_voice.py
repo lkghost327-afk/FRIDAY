@@ -11,7 +11,7 @@ from assistant_core.voice import VoiceService, _Cancelled, _InterruptibleStream,
 def settings(**changes):
     values = dict(persona="friday", voice="en-GB-SoniaNeural", microphone_index=None,
                   speech_enabled=True, recognition_language="en-IN", stt_provider="google",
-                  api_key="", followup_seconds=15)
+                  api_key="", followup_seconds=15, streaming_voice=False, barge_in=False)
     values.update(changes)
     return SimpleNamespace(**values)
 

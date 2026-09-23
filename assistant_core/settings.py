@@ -38,6 +38,15 @@ class Settings:
     followup_seconds: int = 15
     wake_on_start: bool = False
     start_with_windows: bool = False
+    streaming_voice: bool = True
+    barge_in: bool = True
+    noise_suppression: bool = True
+    microphone_name: str = ""
+    microphone_threshold: int = 300
+    wake_sensitivity: int = 50
+    pause_seconds: float = 0.55
+    echo_delay_ms: int = 60
+    setup_complete: bool = False
 
     @property
     def display_name(self):
@@ -79,7 +88,7 @@ class Settings:
             raise ValueError("Unknown setting: " + ", ".join(sorted(set(values) - editable)))
         result = replace(self, **values)
         for field in ("model", "api_key", "voice", "voice_provider", "groq_voice",
-                      "recognition_language", "stt_provider"):
+                      "recognition_language", "stt_provider", "microphone_name"):
             value = getattr(result, field)
             if not isinstance(value, str) or "\n" in value or "\r" in value:
                 raise ValueError(f"Invalid {field.replace('_', ' ')}.")
@@ -90,19 +99,24 @@ class Settings:
             raise ValueError("Enter an Edge voice such as en-IE-EmilyNeural or en-GB-RyanNeural.")
         if not re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z]{2,4})?", result.recognition_language):
             raise ValueError("Use a recognition language such as en-IN, en-US, or hi-IN.")
-        if result.stt_provider not in {"auto", "google", "groq"}:
-            raise ValueError("Choose Auto, Google or Groq speech recognition.")
+        if result.stt_provider not in {"auto", "google", "groq", "local"}:
+            raise ValueError("Choose Auto, Google, Groq or Local speech recognition.")
         if result.voice_provider not in {"edge", "groq"}:
             raise ValueError("Choose Edge or Groq voice generation.")
         if result.groq_voice not in {"autumn", "diana", "hannah", "austin", "daniel", "troy"}:
             raise ValueError("Choose an available expressive Groq voice.")
         if any(type(getattr(result, name)) is not bool
-               for name in ("speech_enabled", "wake_on_start", "start_with_windows")):
+               for name in ("speech_enabled", "wake_on_start", "start_with_windows", "streaming_voice", "barge_in", "noise_suppression", "setup_complete")):
             raise ValueError("Speech, wake-at-start and Windows startup settings must be on or off.")
         if result.microphone_index is not None and (type(result.microphone_index) is not int or result.microphone_index < 0):
             raise ValueError("Choose a valid microphone.")
         if type(result.followup_seconds) is not int or not 0 <= result.followup_seconds <= 60:
             raise ValueError("Follow-up listening must be between 0 and 60 seconds.")
+        for field, low, high in (("microphone_threshold", 50, 10000), ("wake_sensitivity", 1, 100), ("echo_delay_ms", 0, 300)):
+            if type(getattr(result, field)) is not int or not low <= getattr(result, field) <= high:
+                raise ValueError(f'{field.replace("_", " ")} must be between {low} and {high}.')
+        if type(result.pause_seconds) not in (int, float) or not .3 <= result.pause_seconds <= 1.5:
+            raise ValueError('Speech pause must be between 0.3 and 1.5 seconds.')
         return result
 
     def save(self, base_dir):

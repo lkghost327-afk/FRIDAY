@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import queue
+import os
 import re
 import threading
 import time
@@ -318,6 +319,18 @@ class AssistantWindow(ctk.CTk):
                 self._append_message(event.get("role", "system"), event.get("text", ""))
             elif kind == "status":
                 self._set_status(event.get("state", "standby"), event.get("detail", ""))
+            elif kind == 'transcript_partial':
+                self.detail_label.configure(text='Hearing: ' + event.get('text', '')[-160:])
+            elif kind == 'calibration':
+                try:
+                    self.controller.save_calibration(event['threshold'])
+                except (OSError, ValueError):
+                    self._append_message('system', 'Microphone tested, but its calibration could not be saved.')
+            elif kind == 'update_ready':
+                if messagebox.askyesno('Update ready', 'The installer checksum is verified. Close this assistant and run the update?', parent=self):
+                    os.startfile(event['path'])
+                    self._exit()
+                    return
             elif kind in {"notice", "error"}:
                 self._append_message("error" if kind == "error" else "system", event.get("message") or event.get("text", ""))
             elif kind in {"config", "settings"}:
@@ -328,7 +341,7 @@ class AssistantWindow(ctk.CTk):
             elif kind == "wake_detected":
                 self._wake_overlay_session = True
                 self._overlay.show("listening", event.get("detail", "Listening"))
-        self._schedule(60, self._poll_events)
+        self._schedule(120 if self._hidden_to_tray else 60, self._poll_events)
 
     def _poll_tray(self):
         """Run native tray requests on Tk's owning thread."""
@@ -650,6 +663,10 @@ class SettingsDialog(ctk.CTkToplevel):
         content.grid_columnconfigure(0, weight=1)
         self._content = content
         self._row = 0
+        from .ownership import details
+        publisher = details(settings.persona)
+        self._section('PROJECT PUBLISHER')
+        self._hint(f"Created by {publisher['publisher']}\n{publisher['repository']}\nSigned release verification: see OWNERSHIP.md in the repository.")
         self._section("STARTUP")
         self.start_with_windows = tk.BooleanVar(master=self, value=settings.start_with_windows)
         ctk.CTkSwitch(content, text="Start with Windows", variable=self.start_with_windows,
@@ -683,9 +700,10 @@ class SettingsDialog(ctk.CTkToplevel):
         parent._button(content, "Test saved voice", self._test_voice, width=150).grid(
             row=self._row, column=0, sticky="w", padx=14, pady=(0, 9))
         self._row += 1
-        self.stt = self._combo("Speech recognition service", settings.stt_provider, ("auto", "groq", "google"), readonly=True)
+        self.stt = self._combo("Speech recognition service", settings.stt_provider, ("auto", "local", "groq", "google"), readonly=True)
         self.language = self._entry("Recognition language", settings.recognition_language)
-        self._hint("Auto uses Groq Whisper with Google fallback. Examples: en-IN, en-GB, hi-IN.\nThe local wake detector listens for your assistant's name. Requests use online recognition.")
+        self._hint("Auto uses Groq Whisper with Google fallback. Online language examples: en-IN, en-GB, hi-IN.\nThe local wake detector listens for your assistant's name.")
+        self._hint('Local streams English transcription without uploading the request. Auto shows a live local preview when the model is installed, then uses the selected online service for the final text.')
         self.microphone = self._combo("Microphone", self._mic_value, tuple(self._mic_values), readonly=True)
         mic_actions = ctk.CTkFrame(content, fg_color="transparent")
         mic_actions.grid(row=self._row, column=0, sticky="ew", padx=14, pady=(0, 10))
@@ -696,6 +714,26 @@ class SettingsDialog(ctk.CTkToplevel):
         self.refresh_mics.pack(side="right")
         self.followup = self._entry("Follow-up listening (seconds)", str(settings.followup_seconds))
         self._hint("After a voice reply, keep listening for this long. Use 0 to turn follow-ups off.")
+        parent._button(content, 'Test / calibrate saved microphone', lambda:self.controller.calibrate_microphone(), width=260).grid(
+            row=self._row, column=0, sticky='w', padx=14, pady=8)
+        self._row += 1
+        self._hint('Save your microphone selection first. Then stay quiet for two seconds during calibration. Disconnected microphones fall back to Windows default and reconnect by device name.')
+        self._section('RESPONSE SPEED & INTERRUPTION')
+        self.streaming_voice = self._switch('Stream audio as it arrives', settings.streaming_voice)
+        self.barge_in = self._switch('Allow spoken interruptions', settings.barge_in)
+        self.noise_suppression = self._switch('Reduce background noise', settings.noise_suppression)
+        self._hint('Spoken interruption needs the local model. Echo cancellation is available during streaming Edge playback; buffered/Windows fallback voices pause capture to avoid feedback.')
+        self.wake_sensitivity = self._entry('Wake sensitivity (1–100; higher is more sensitive)', settings.wake_sensitivity)
+        self.pause_seconds = self._entry('Pause before ending a request (0.3–1.5 seconds)', settings.pause_seconds)
+        self.echo_delay = self._entry('Speaker echo delay (0–300 ms)', settings.echo_delay_ms)
+        self._section('SETUP & UPDATES')
+        for title, action in (('Install local wake model', 'wake'), ('Check for updates', 'check'), ('Download verified update', 'download')):
+            parent._button(content, title, lambda value=action:self.controller.maintenance(value), width=255).grid(
+                row=self._row, column=0, sticky='w', padx=14, pady=5)
+            self._row += 1
+        self._hint('The installer includes the wake model. Portable users can download it here. Updates come from this project’s GitHub Releases and are checked before you choose to install.')
+        self._section('APP CONTEXT & ROUTINES')
+        self._hint('Try “open Spotify”, then “minimize it”; “search Spotify for jazz”; or “list buttons in Spotify”.\nSave a routine: create routine work: open Notepad; volume 30\nRun it: start work. Manage it: list routines / delete routine work. Stop cancels remaining steps.')
         self._section("SAVED MEMORIES")
         self._hint("Clear facts you have asked the assistant to remember. This cannot be undone.")
         parent._button(content, "Clear saved memories", self._clear_memories, width=180).grid(
@@ -718,6 +756,13 @@ class SettingsDialog(ctk.CTkToplevel):
         self.parent._label(self._content, text, size=10, color=self.parent.accent, bold=True, anchor="w").grid(
             row=self._row, column=0, sticky="ew", padx=14, pady=(16, 9))
         self._row += 1
+
+    def _switch(self, label, value):
+        variable = tk.BooleanVar(master=self, value=bool(value))
+        ctk.CTkSwitch(self._content, text=label, variable=variable, progress_color=self.parent.accent,
+                      text_color=TEXT, font=(FONT, 12)).grid(row=self._row, column=0, sticky='w', padx=14, pady=7)
+        self._row += 1
+        return variable
 
     def destroy(self):
         commands = set(self._tclCommands or ())
@@ -835,6 +880,14 @@ class SettingsDialog(ctk.CTkToplevel):
                 "microphone_index": self._mic_values.get(self.microphone.get()),
                 "followup_seconds": followup,
                 "start_with_windows": self.start_with_windows.get(),
+                "setup_complete": True,
+                "streaming_voice": self.streaming_voice.get(),
+                "barge_in": self.barge_in.get(),
+                "noise_suppression": self.noise_suppression.get(),
+                "wake_sensitivity": int(self.wake_sensitivity.get()),
+                "pause_seconds": float(self.pause_seconds.get()),
+                "echo_delay_ms": int(self.echo_delay.get()),
+                "microphone_name": self.microphone.get().split(' · ', 1)[1] if ' · ' in self.microphone.get() else self.controller.settings.microphone_name if self._mic_values.get(self.microphone.get()) is not None else '',
             }
             self.controller.save_settings(values)
         except (ValueError, OSError) as exc:

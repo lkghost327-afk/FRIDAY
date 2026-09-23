@@ -16,3 +16,6 @@ pycaw==20251023
 comtypes==1.4.16
 pywin32==311; sys_platform == 'win32'
 ddgs==9.16.0
+miniaudio==1.71
+aec-audio-processing==1.0.1; sys_platform == 'win32'
+pywinauto==0.6.9; sys_platform == 'win32'

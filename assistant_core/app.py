@@ -19,14 +19,20 @@ def data_directory(entry_path, persona):
 def main(persona, entry_path):
     parser = argparse.ArgumentParser(description=f"{persona.title()} desktop assistant")
     parser.add_argument("--check", action="store_true", help="Check dependencies and AI connection without opening the UI")
+    parser.add_argument('--check-offline', action='store_true', help='Check packaged native dependencies without network, microphone or playback')
+    parser.add_argument('--report', type=Path, help='Write diagnostic JSON to this file (with --check or --check-offline)')
     parser.add_argument("--smoke-ui", action="store_true", help="Open then close the UI without microphone or speech")
     parser.add_argument("--background", action="store_true", help="Start in the system tray")
     args = parser.parse_args()
     base_dir = data_directory(entry_path, persona)
-    if args.check:
+    if args.check or args.check_offline:
         from .diagnostics import run_checks
-        result = run_checks(base_dir, persona, live=True)
-        print(json.dumps(result, indent=2))
+        result = run_checks(base_dir, persona, live=args.check)
+        rendered = json.dumps(result, indent=2)
+        if args.report:
+            args.report.write_text(rendered, encoding='utf-8')
+        if sys.stdout is not None:
+            print(rendered)
         return 0 if result["ok"] else 1
     from .controller import AssistantController
     from .ui import AssistantWindow
@@ -43,6 +49,11 @@ def main(persona, entry_path):
         window.after(2000, window._exit)
     else:
         controller.start()
+        if not controller.settings.setup_complete and not args.background:
+            from .wake import model_directory
+            if not (model_directory() / 'am/final.mdl').is_file():
+                controller.maintenance('wake')
+            window._schedule(700, window._open_settings)
         def poll_launch():
             if window._closed:
                 return
@@ -68,7 +79,7 @@ def launch(persona, entry_path):
                    "Run Check.bat for connection and dependency diagnostics.")
         if sys.stderr is not None:
             print(message, file=sys.stderr)
-        if sys.platform == "win32" and not any(a in sys.argv for a in ("--check", "--smoke-ui")):
+        if sys.platform == "win32" and not any(a in sys.argv for a in ("--check", "--check-offline", "--smoke-ui")):
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, message, "Assistant startup", 0x10)
         return 1

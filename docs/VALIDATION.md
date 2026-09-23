@@ -1,5 +1,17 @@
 # Validation
 
+## 23 September 2026: version 5 and publisher verification
+
+- **136 automated tests passed independently in each repository** with Python 3.12 on Windows. Coverage includes streaming cancellation, partial transcription, spoken corrections, microphone reconnection, calibrated settings, action verification, app context, routines, cancellation between requests, update origin/checksum validation and the pinned publisher key.
+- A real synthesized MP3 was fed incrementally through the native miniaudio decoder into a silent test output. PCM playback began before the last simulated network packet; no microphone or speaker was used. Native WebRTC processing accepted the expected capture and playback frame formats.
+- All **22 packaged core modules and each persona's launcher** matched the final source in both directory payloads and both portable EXEs. A stale cached module found during packaging was rebuilt before release.
+- All four packages passed isolated first-user native dependency and background UI checks with no API key and no Python on PATH. The installed payloads loaded their bundled English model. Diagnostics reported the correct persona, original repository and publisher-key fingerprint. No credential file was created.
+- Both final Setup EXEs were actually installed into isolated temporary directories, checked for native dependencies/model and hidden UI launch, and uninstalled successfully. Existing Windows startup values were preserved, and the temporary uninstall registrations were removed. Tests ran on the development Windows PC, not a separate clean Windows machine.
+- Settings and diagnostics identify `lkghost327-afk`; the installer identifies the same publisher. Releases include a pinned RSA-3072 public key, SHA-256 asset hashes and a signed manifest. The private signing key is protected for the publisher's Windows account outside the repositories and build payloads. See [verification instructions](../OWNERSHIP.md).
+- No shutdown, sleep, restart or sign-out was performed. Tests did not close the user's real applications or change their startup preferences.
+
+Version 5 limits: physical microphone/accent accuracy and speaker echo cancellation still need tuning on each PC. Spoken interruption is supported during streaming Edge speech with the local model; buffered Groq/Windows fallback pauses capture. Local recognition is English; Auto uses local partial previews but still sends a completed utterance for final cloud transcription. Windows UI Automation works only with accessible, unambiguous controls and normal permitted windows. The fan voices are not film-identical. Online availability and latency vary. Release signatures do not make these builds Windows Authenticode-signed.
+
 ## 9 September 2026: Windows startup and EXE release
 
 - Before release publishing, both Windows x64 EXEs also passed an isolated first-user background UI launch with no API key, no local wake model, and Python removed from PATH. The temporary app-data folders were used and no bundled credential file appeared. These checks ran on the development PC, not a separate clean Windows installation.
@@ -23,4 +35,4 @@
 - Closing the running FRIDAY window left its process alive. Launching again restored the same window. Further interactive desktop testing was stopped when the user pressed Escape.
 - Power actions were tested with mocked Windows calls. Validation did not shut down, restart, lock or sleep the user's device.
 
-Known limits: film-identical voices are not provided; online conversation, transcription and neural speech depend on provider/network availability. Wake capture pauses during assistant speech to avoid echo. Unregistered portable apps need a Start or desktop shortcut; ambiguous or elevated apps may need manual handling. The optional Groq expressive voice depends on account/model access.
+Version 4 limits (some superseded by version 5): film-identical voices are not provided; online conversation, transcription and neural speech depend on provider/network availability. Wake capture pauses during assistant speech to avoid echo. Unregistered portable apps need a Start or desktop shortcut; ambiguous or elevated apps may need manual handling. The optional Groq expressive voice depends on account/model access.

@@ -1,53 +1,36 @@
 # FRIDAY: first run on Windows
 
-## Download and launch
+1. Download **FRIDAY-Setup.exe** from [FRIDAY Releases](https://github.com/lkghost327-afk/FRIDAY/releases). Use Windows 10/11 x64. The installer includes Python and the English wake/transcription model and runs without administrator access.
+2. Launch FRIDAY. First-use Settings asks for a microphone and an optional Groq key. Local PC commands do not need an AI key; conversation requires your own key from https://console.groq.com/keys.
+3. Select the microphone and Save, then reopen Settings and run **Test / calibrate saved microphone** while staying quiet for two seconds. Allow desktop microphone access in Windows Settings if needed.
+4. Try typing “open Notepad”, then use **Talk**. Choose **local** recognition for local English transcription, or **auto** for a local preview followed by cloud recognition. Enable **Wake word** to say “Friday” before requests.
+5. Default Edge speech streams as it arrives. With the local model, say “stop” or a correction during playback. Tune wake sensitivity, request pause and echo delay if needed. **Esc** and **Stop** also cancel.
 
-1. Use Windows 10 or 11, 64-bit (x64). These builds are for Windows desktop PCs.
-2. Download **FRIDAY.exe** from this repository's Releases page. The GitHub source-code ZIP is for development; it is not the app download.
-3. Save the EXE in a permanent folder and double-click it. Python is included. A first launch can take a few seconds while the bundled files unpack.
-4. Open **Settings**, select your actual microphone, and click **Save**. Allow desktop apps to use your microphone in Windows Settings if access is blocked.
+## Portable version
 
-These builds are not code-signed. Windows may show an unknown-publisher warning. The release includes SHA256SUMS.txt so you can check that the downloaded file matches the published build using PowerShell:
+Download **FRIDAY.exe** if you prefer a single file. Keep it in a permanent folder. Python is included; the wake model downloads in the background on first normal launch. You can also select **Settings → Install local wake model**. This requires internet access and about 40 MB of download. The installer already includes the model.
 
-```powershell
-Get-FileHash .\FRIDAY.exe -Algorithm SHA256
-```
+The model can be installed manually from https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip. Extract its named folder beneath `%LOCALAPPDATA%\FanAssistants\speech-models\`. There must be an `am\final.mdl` inside that model folder.
 
-## Conversation and voice
+## Background, startup and updates
 
-For AI conversation, create your own key in the [Groq console](https://console.groq.com/keys), paste it into **Settings → Groq API key**, and Save. No shared API key is bundled. Use the default **auto** conversation model and **edge** voice provider to begin. Conversation, request transcription and neural speech require an internet connection; provider availability and account limits affect response speed.
+Close/minimize keeps the assistant in the tray. Double-click its EXE or use tray **Show** to restore it. Tray **Exit** or **Ctrl+Q** quits completely. Only enable wake listening in one assistant at a time.
 
-Try typing **what time is it** or **open Notepad** first. Local PC commands work without an AI key. Then press **Talk** and say a request. Enable **Wake word** to call “Friday” before a question. For reliable capture, run one assistant with wake listening enabled at a time. Wake listening pauses during replies to avoid feedback from the speaker.
+**Settings → Start with Windows → Save** enables launch after sign-in; disable and Save to remove it. Enable **Wake word** separately if desired. Both default off. After moving a portable EXE, launch it from the new location once to refresh startup.
 
-## Optional local wake detection, without installing Python
+**Check for updates** looks for a newer stable GitHub Release. **Download verified update** checks the published SHA-256 and size, then asks whether to run the installer. The application exits before installation. Updates are never installed automatically. Uninstall through Windows Apps; personal settings/history are retained in `%LOCALAPPDATA%\FanAssistants\FRIDAY\`.
 
-The EXE includes the speech engine, but the separate 40 MB wake model is optional. Without it, the app announces online wake fallback.
+## Troubleshooting
 
-1. Download [vosk-model-small-en-us-0.15.zip](https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip) from the official Vosk site.
-2. Extract it and place the whole **vosk-model-small-en-us-0.15** folder under `%LOCALAPPDATA%\FanAssistants\speech-models\`. You can paste that parent path into File Explorer and create the folders if needed.
-3. Check that this file exists, without an extra nested model folder:
+- No AI reply: check your key, internet and Groq account access. Local commands remain available.
+- Poor recognition: save the correct input device, calibrate it, try a headset and adjust the request pause. Local recognition supports English; online recognition supports the configured language.
+- Spoken interruptions trigger incorrectly: use a headset, tune echo delay, or disable **Allow spoken interruptions**. Buffered Groq/Windows speech pauses capture while playing.
+- No speech: enable spoken replies, check output volume and use **Test saved voice**. Online services can be unavailable; the app attempts fallbacks.
+- App action unconfirmed: check the app’s window or save dialog. Add a Start/desktop shortcut for portable apps. UI Automation depends on the app exposing accessible controls.
+- Setup/update failed: check internet access and use Releases to download manually. An incomplete manually installed model folder should be renamed before retrying model setup.
 
-```text
-%LOCALAPPDATA%\FanAssistants\speech-models\vosk-model-small-en-us-0.15\am\final.mdl
-```
+Releases are unsigned. Compare `Get-FileHash .\FRIDAY-Setup.exe -Algorithm SHA256` with **SHA256SUMS.txt** in the release. See [validation and limitations](VALIDATION.md) for the checks performed.
 
-4. Exit the assistant using the tray menu and launch it again. Both assistants can use the same model installation.
+## Publisher verification
 
-The [Vosk model list](https://alphacephei.com/vosk/models) lists this model under Apache 2.0. Source users can instead run Setup.bat to install it automatically.
-
-## Background and Windows startup
-
-Closing or minimizing the window keeps the assistant running in the tray. Use **Show** in the tray menu, or double-click the EXE again, to restore it. Use tray **Exit** or **Ctrl+Q** to quit completely.
-
-To start after Windows sign-in, enable **Settings → Startup → Start with Windows** and Save. Turn the same setting off and Save to disable automatic startup. Enable the separate **Wake word** switch if you want it to listen after sign-in. Both settings default to off for a new user. If the EXE is moved after enabling startup, launch it from the new location once.
-
-## If something is not working
-
-- **No AI reply:** check the key, internet connection and Groq account availability. Local commands still work without a key.
-- **Cannot hear you:** choose the correct input device, check Windows microphone access, and test with Talk before using the wake word.
-- **No speech:** enable spoken replies, check the output volume/device, and use Settings → Test saved voice. Edge is the default; optional Groq expressive speech may require accepting model terms in your account.
-- **Cannot find a portable app:** add a Start-menu or desktop shortcut for it. Ambiguous, elevated or unusual apps may need manual handling.
-
-Settings, keys and personal history are stored in `%LOCALAPPDATA%\FanAssistants\FRIDAY\`, separately from the EXE. Moving or updating the EXE keeps those settings.
-
-Validation covered fresh-user packaged launches on the development Windows PC, existing automated action/audio/tray tests, and live AI checks. It does not guarantee identical microphone recognition, network latency or compatibility with every PC.
+The original publisher is lkghost327-afk. Download all release assets to one folder and run Verify-Release.ps1 from the original repository to verify the pinned publisher key, signed manifest and file hashes. See [ownership verification](../OWNERSHIP.md).

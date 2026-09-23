@@ -19,3 +19,14 @@
 The brain reconstructs streaming content and tool calls. `streaming.py` queues complete spoken sentences, suppresses code, and caps long speech. Two daemon render workers prepare upcoming audio while the speaker owns playback. Generation tokens invalidate old work on interruption. A late tool-call delta cancels provisional speech; tool arguments never become speech. The final full reply is saved once.
 
 `power.py` provides cancellable ten-second shutdown/restart/sleep/lock actions. These require a directly parsed user command, not a model tool call. Shutdown uses `/t 0` after the local countdown and omits `/f`, allowing unsaved applications to block it. Sleep uses `SetSuspendState` with the shutdown privilege restored afterward.
+
+
+## Version 5 additions
+
+`audio_io.py` decodes arriving Edge MP3 chunks into 48 kHz PCM and sends the same playback reference to WebRTC AEC. Capture is mono 16 kHz in 10 ms processing frames. One microphone worker owns capture, local preview/final Vosk recognition, calibration and interruption detection. Auto still sends a completed utterance for the final cloud transcription.
+
+`desktop.py` resolves app windows, verifies state and uses exact accessible controls. `routines.py` validates every step before execution and checks the active job cancellation token between steps. App references expire after five minutes.
+
+`maintenance.py` bounds model downloads and archive expansion, validates paths, checks fixed-repository update URLs and verifies asset size/SHA-256 before offering installation. `metrics.py` retains at most 100 timing samples per metric in memory without transcripts.
+
+The Inno installer uses a PyInstaller directory payload to avoid repeated one-file extraction. It includes the English model and installs per-user. The portable EXE uses first-run model setup. Both retain personal state outside installation folders.

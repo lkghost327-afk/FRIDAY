@@ -69,6 +69,7 @@ NEVER_CLOSE_APPS = {
     "task manager", "windows security", "microsoft defender", "settings", "windows settings",
 }
 NEVER_CLOSE_PROCESSES = {
+    "winlogon", "csrss", "lsass", "services", "svchost", "dwm", "wininit", "sihost",
     "explorer", "cmd", "powershell", "pwsh", "windowsterminal", "conhost", "openconsole",
     "taskmgr", "systemsettings", "securityhealthservice", "securityhealthsystray", "msmpeng",
     "nissrv", "smartscreen", "friday", "alfred", "python", "pythonw",
@@ -139,6 +140,15 @@ def _tool(name: str, description: str, properties: dict | None = None, required:
 
 
 TOOL_DEFINITIONS = [
+    _tool("window_control", "Minimize, maximize, restore or focus one unambiguous application window.",
+          {"app": _string("App name, or it for the recent app", MAX_APP_NAME),
+           "action": {"type": "string", "enum": ["minimize", "maximize", "restore", "focus"]}}, ("app", "action")),
+    _tool("search_app", "Search inside an explicitly requested application using its accessible Search field.",
+          {"app": _string("App name", MAX_APP_NAME), "query": _string("Search text", 300)}, ("app", "query")),
+    _tool("list_app_controls", "List accessible buttons in an explicitly named application.",
+          {"app": _string("App name", MAX_APP_NAME)}, ("app",)),
+    _tool("press_app_button", "Invoke an exact accessible button in a named app; consequential buttons are excluded.",
+          {"app": _string("App name", MAX_APP_NAME), "button": _string("Exact accessible button label", 100)}, ("app", "button")),
     _tool("get_time", "Read the current local date, time and timezone."),
     _tool("get_system_status", "Read actual OS, CPU cores and usage, total and available RAM, disk and battery."),
     _tool("open_app", "Open an installed Windows application only when the user explicitly asks. The app name is resolved against Windows' installed-app catalog; it is never executed as a command.",
@@ -180,7 +190,7 @@ TOOL_DEFINITIONS = [
 class ActionRouter:
     """Route explicit commands or validated model tool requests to real actions."""
 
-    def __init__(self, base_dir: Path, persona: str, emit: Callable[..., None]):
+    def __init__(self, base_dir: Path, persona: str, emit: Callable[..., None], verify_actions=True):
         self.base_dir = Path(base_dir).resolve()
         self.persona = persona
         self.emit = emit
@@ -189,6 +199,12 @@ class ActionRouter:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._stop = threading.Event()
+        self.cancelled = lambda: False
+        self.verify_actions = verify_actions
+        from .desktop import DesktopActions
+        from .routines import Routines
+        self.desktop = DesktopActions(self)
+        self.routines = Routines(self.data_dir / 'routines.json')
         self._wake = threading.Event()
         self._errors: dict[str, str] = {}
         self._app_cache: tuple[InstalledApp, ...] = ()
@@ -219,7 +235,15 @@ class ActionRouter:
             return "The assistant is closing; that action was not performed."
         try:
             self._validate(self._registry[name]["parameters"], arguments)
-            return getattr(self, "_" + name)(**arguments)
+            arguments = dict(arguments)
+            if 'app' in arguments:
+                arguments['app'] = self.desktop.resolve_reference(arguments['app'])
+            result = getattr(self, "_" + name)(**arguments)
+            if self.verify_actions and name in {'open_app', 'close_app'} and result.startswith(('Sent ', 'Asked ')):
+                if name == 'open_app':
+                    self.desktop.remember(arguments['app'])
+                result += '\n' + self.desktop.verify(arguments['app'], opened=name == 'open_app')
+            return result
         except (ValueError, TypeError, KeyError) as exc:
             return f"I couldn't complete that action: {exc}"
         except ImportError as exc:
@@ -267,6 +291,24 @@ class ActionRouter:
         command = re.sub(r"\s+please[.!?]*$", "", command, flags=re.I)
         clean = command.strip().rstrip(".!?").strip()
         lower = clean.lower().replace("’", "'")
+        try:
+            routine = self.routines.handle(clean, self)
+            if routine is not None:
+                return routine
+        except (ValueError, OSError) as error:
+            return f'Routine: {error}'
+        match = re.fullmatch(r'(minimize|maximize|restore|focus|switch to) (.+)', clean, re.I)
+        if match:
+            return self.execute('window_control', {'action': 'focus' if match[1].lower() == 'switch to' else match[1].lower(), 'app': match[2]})
+        match = re.fullmatch(r'search (.+?) for (.+)', clean, re.I)
+        if match and match[1].lower() not in {'the web', 'web', 'online'}:
+            return self.execute('search_app', {'app':match[1], 'query':match[2]})
+        match = re.fullmatch(r'list buttons in (.+)', clean, re.I)
+        if match:
+            return self.execute('list_app_controls', {'app':match[1]})
+        match = re.fullmatch(r'(?:press|click) (.+?) in (.+)', clean, re.I)
+        if match:
+            return self.execute('press_app_button', {'button':match[1], 'app':match[2]})
         if lower in {"cancel power action", "cancel shutdown", "cancel restart", "cancel sleep", "abort shutdown"}:
             return self.execute("power_control", {"action": "cancel"})
         device = r"(?:(?:my|the|this)\s+)?(?:pc|computer|device|laptop|system)"
@@ -368,6 +410,18 @@ class ActionRouter:
         if calc:
             return self.execute("calculate", {"expression": calc.group(1).replace("^", "**")})
         return None
+
+    def _window_control(self, app, action):
+        return self.desktop.window_control(app, action)
+
+    def _search_app(self, app, query):
+        return self.desktop.controls(app, 'search', query)
+
+    def _list_app_controls(self, app):
+        return self.desktop.controls(app, 'list')
+
+    def _press_app_button(self, app, button):
+        return self.desktop.controls(app, 'button', button)
 
     def _get_time(self) -> str:
         now = dt.datetime.now().astimezone()

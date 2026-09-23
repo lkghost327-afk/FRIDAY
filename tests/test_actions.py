@@ -26,7 +26,7 @@ class ActionRouterTests(unittest.TestCase):
             self.alert.set()
 
         self.emit = emit
-        self.router = ActionRouter(self.base, "FRIDAY", self.emit)
+        self.router = ActionRouter(self.base, "FRIDAY", self.emit, verify_actions=False)
 
     def tearDown(self):
         self.router.close()
@@ -34,7 +34,7 @@ class ActionRouterTests(unittest.TestCase):
 
     def restart(self):
         self.router.close()
-        self.router = ActionRouter(self.base, "FRIDAY", self.emit)
+        self.router = ActionRouter(self.base, "FRIDAY", self.emit, verify_actions=False)
 
     def test_conversation_falls_through(self):
         self.assertIsNone(self.router.handle("How would an arc reactor work?"))
@@ -70,8 +70,9 @@ class ActionRouterTests(unittest.TestCase):
 
     def test_tools_return_copy(self):
         definitions = self.router.tools
+        original_name = definitions[0]["function"]["name"]
         definitions[0]["function"]["name"] = "run_shell"
-        self.assertEqual(self.router.tools[0]["function"]["name"], "get_time")
+        self.assertEqual(self.router.tools[0]["function"]["name"], original_name)
 
     def test_safe_application_launch_arguments(self):
         executable = r"C:\Windows\System32\notepad.exe"

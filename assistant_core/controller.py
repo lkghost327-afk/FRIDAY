@@ -20,7 +20,9 @@ HELP = ("I can talk through questions, explain things, help you code, and keep t
         "'take a note buy batteries', 'set a timer for 5 minutes', or 'weather in Mumbai'. "
         "Say 'remember that …' to save something about you. I can search the web for current information. "
         "Use Talk for one request, or enable Wake word to call my name and continue the conversation. "
-        "Press Escape or Stop to interrupt. AI chat and speech recognition use the internet.")
+        "Try 'minimize it', 'search Spotify for jazz', or 'list buttons in Notepad'. "
+        "Save a routine with 'create routine work: open Notepad; volume 30', then say 'run routine work'. "
+        "Press Escape or say Stop to interrupt. Local recognition is available in Settings; AI chat uses the internet.")
 
 
 class AssistantController:
@@ -45,6 +47,8 @@ class AssistantController:
         self._wake_enabled = bool(self.settings.wake_on_start)
         self._started = False
         self._diagnosing = threading.Event()
+        self._maintenance_busy = threading.Event()
+        self.pending_update = None
         self.log = logging.getLogger("assistant." + persona)
         self.log.setLevel(logging.INFO)
         self.log.propagate = False
@@ -56,6 +60,7 @@ class AssistantController:
             self.log.addHandler(handler)
         self.voice = VoiceService(self.settings, self.emit)
         self.router = ActionRouter(self.base_dir, persona, self.emit)
+        self.router.cancelled = lambda: self._cancel.is_set()
         if startup_error is not None:
             self.emit("notice", message=f"Windows startup could not be updated: {startup_error}")
 
@@ -67,6 +72,8 @@ class AssistantController:
             self.events.put({"kind": "message", "role": "assistant", "text": text})
             self.voice.speak(text)
             return
+        if kind == 'wake_detected' and hasattr(self.voice, 'metrics'):
+            self.voice.metrics.count('wake_detections')
         # A cancelled voice operation must not overwrite a current model request's status.
         if kind == "status" and payload.get("state") in {"ready", "standby"} and self._busy.is_set():
             return
@@ -93,7 +100,7 @@ class AssistantController:
         self._worker.start()
         self.emit("status", state="standby" if self._wake_enabled else "ready",
                   detail=f"Say {self.settings.persona}, followed by your question." if self._wake_enabled else "Type a message or press Talk")
-        self.log.info("Started version 4.1; wake listening %s", "enabled" if self._wake_enabled else "disabled")
+        self.log.info("Started version 5.0; wake listening %s", "enabled" if self._wake_enabled else "disabled")
         def warmup():
             try:
                 self.router._installed_apps()
@@ -130,6 +137,8 @@ class AssistantController:
             self._busy.set()
             self.emit("message", role="user", text=text)
             self.emit("status", state="thinking", detail="Working on your request")
+            if hasattr(self.voice, 'metrics'):
+                self.voice.metrics.begin()
             self._jobs.put_nowait((text, current))
 
     def _drain_jobs(self):
@@ -187,6 +196,7 @@ class AssistantController:
             try:
                 if cancel.is_set():
                     continue
+                self.router.cancelled = cancel.is_set
                 answer = self._local_reply(text)
                 if answer is None:
                     history, facts = self.memory.snapshot()
@@ -284,6 +294,44 @@ class AssistantController:
     def list_microphones(self):
         return self.voice.list_microphones()
 
+    def calibrate_microphone(self):
+        self.stop(announce=False)
+        self.voice.calibrate()
+
+    def save_calibration(self, threshold):
+        self.settings = self.settings.updated({'microphone_threshold': threshold})
+        self.settings.save(self.base_dir)
+        self.emit('notice', message=f'Microphone calibrated. Background-noise threshold: {threshold}.')
+
+    def maintenance(self, action):
+        if self._maintenance_busy.is_set():
+            self.emit('notice', message='Setup or update work is already running.')
+            return
+        self._maintenance_busy.set()
+        def work():
+            from .maintenance import install_wake, check_update, download_update
+            from . import __version__
+            try:
+                if action == 'wake':
+                    message = install_wake(lambda text:self.emit('notice', message=text), self._closed.is_set)
+                    self.voice._local_wake_failed = False
+                    self.emit('notice', message=message)
+                elif action == 'check':
+                    self.pending_update = check_update(self.settings.persona, __version__)
+                    self.emit('notice', message=f'Update {self.pending_update["version"]} is available. Use Download update in Settings.'
+                              if self.pending_update else 'No newer stable installer is published.')
+                elif action == 'download':
+                    if not self.pending_update:
+                        raise ValueError('Check for updates first.')
+                    path = download_update(self.pending_update, self.base_dir/'updates', self._closed.is_set)
+                    self.emit('update_ready', path=str(path))
+            except Exception as error:
+                self.emit('notice', message=f'Setup/update could not finish ({type(error).__name__}). Your existing installation is unchanged.')
+                self.log.warning('Maintenance failure: %s', type(error).__name__)
+            finally:
+                self._maintenance_busy.clear()
+        threading.Thread(target=work, name='assistant-maintenance', daemon=True).start()
+
     def test_voice(self):
         if not self.settings.speech_enabled:
             self.emit("notice", message="Turn on spoken replies to test the voice.")
@@ -297,6 +345,8 @@ class AssistantController:
             return
         self._diagnosing.set()
         def check():
+            import json
+            import psutil
             self.emit("notice", message="Checking audio devices and the AI connection…")
             try:
                 names = self.list_microphones()
@@ -304,6 +354,10 @@ class AssistantController:
                          f"Speech recognition: {self.settings.stt_provider}; language: {self.settings.recognition_language}.",
                          f"Voice: {self.settings.voice_provider} / {self.settings.voice}; spoken replies {'on' if self.settings.speech_enabled else 'off'}.",
                          f"Background wake at startup: {'on' if self.settings.wake_on_start else 'off'}."]
+                if hasattr(self.voice, 'metrics'):
+                    process = psutil.Process()
+                    lines.append(f'Assistant RAM: {process.memory_info().rss / (1024*1024):.1f} MB; CPU over 1 second: {process.cpu_percent(interval=1):.1f}%.')
+                    lines.append('Recent performance (no transcripts): ' + json.dumps(self.voice.metrics.summary()))
                 try:
                     lines.append(self.brain.check_connection())
                 except BrainError as error:

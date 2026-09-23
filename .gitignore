@@ -27,3 +27,8 @@ dist/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Private publisher signing material (the public XML key is intentionally tracked)
+*.dpapi
+*.pfx
+*.p12

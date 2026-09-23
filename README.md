@@ -1,84 +1,59 @@
 # FRIDAY
 
-FRIDAY is an independent Iron Man fan desktop assistant for Windows, with conversation, spoken replies, local wake detection and PC commands.
+An independent Iron Man fan assistant for Windows: natural conversation, streamed speech, local wake detection and useful PC controls.
 
-**[Setup instructions](#start)** · [Build FRIDAY.exe](#validation-and-build) · [Batman fans: ALFRED](https://github.com/lkghost327-afk/ALFRED)
+**[Download FRIDAY-Setup.exe](https://github.com/lkghost327-afk/FRIDAY/releases/latest/download/FRIDAY-Setup.exe)** · [Portable EXE](https://github.com/lkghost327-afk/FRIDAY/releases/latest/download/FRIDAY.exe) · [First-run guide](docs/FIRST_RUN.md) · [All releases](https://github.com/lkghost327-afk/FRIDAY/releases) · [ALFRED](https://github.com/lkghost327-afk/ALFRED)
 
-- Ask questions by text or voice and hear replies as sentences become ready.
-- Say “Friday” to activate the assistant, with a small animated blue indicator.
-- Open installed apps, request normal app closure, adjust volume and brightness, and manage reminders.
-- Keep FRIDAY in the tray and optionally start it when you sign in to Windows.
+## Start on Windows
 
-## Start
+1. Download **FRIDAY-Setup.exe** for Windows 10/11 x64. It includes Python, dependencies and the English speech model. Install for your Windows account; administrator access is not required.
+2. Launch FRIDAY. Settings opens on first use. Choose your microphone, save, then use **Test / calibrate saved microphone** and stay quiet for two seconds.
+3. Add your own [Groq API key](https://console.groq.com/keys) for AI conversation. Local typed PC commands work without a key. Choose **local** recognition for English voice commands without uploading the recording.
+4. Press **Talk**, or enable **Wake word** and say “Friday, open Spotify”. Only enable wake listening in one assistant at a time.
 
-**Using a built EXE:** double-click **FRIDAY.exe**. Python and Setup.bat are not required for the packaged app. To build it from this repository, follow [Validation and build](#validation-and-build). Open **Settings** to add your own Groq API key and choose a microphone. Keep the EXE in a permanent folder before enabling Windows startup.
+The optional portable EXE needs no Python installation. Its first run downloads the speech model, or use **Settings → Install local wake model**. Keep it in a permanent folder if enabling startup. Releases are unsigned; SHA256SUMS.txt is provided for checking downloads. Download a release asset, not GitHub’s source-code ZIP.
 
-**Running from source:**
+## What is new in version 5
 
-1. Install Python 3.12 and run **Setup.bat**. Setup installs dependencies and a 40 MB local wake model outside this folder.
-2. Run **Start.bat**. Add a Groq API key in **Settings** for conversation. Local commands work without a key.
-3. Select your actual microphone. **Auto** recognition uses Groq Whisper with Google fallback.
-4. Enable **Wake word**, then say “Friday, open Spotify” or press **Talk**.
-
-The wake switch is remembered. It defaults to off for a fresh installation. Run one assistant with wake enabled at a time.
-
-## Background mode
-
-Use **Hide to tray**, minimize, or close the window to keep it running. **Background.bat** starts in the tray. Launching again restores the existing window instead of starting another listener.
-
-The tray menu has **Show**, speech mute, wake toggle and **Exit**. **Ctrl+Q** exits from the main window. A small blue indicator pulses when FRIDAY is detected, changes during processing/speech, and fades after the exchange. Temporary microphone failures retry automatically.
-
-In **Settings → Startup**, enable **Start with Windows** and click **Save** to launch quietly in the tray each time you sign in. Turn the switch off and save to remove automatic startup. This setting defaults to off and is independent for FRIDAY and ALFRED. Enable **Wake word** in the main window if you want voice activation after sign-in; that preference is remembered too.
-
-Startup uses a per-user entry and needs no administrator access. If you separately disabled the assistant in **Windows Settings → Apps → Startup**, enable it there as well. After moving the EXE, open it from the new location once to update an existing startup entry. Launching a second background instance leaves the existing window hidden; double-clicking normally restores it. Startup happens after sign-in, following [Windows startup behavior](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys).
+- **Streaming speech:** Edge audio is decoded and played as chunks arrive. Local English transcription shows words while you speak; Auto uses this preview and then cloud transcription for the final request.
+- **Spoken interruptions:** say “stop” or begin a correction during streaming Edge speech. WebRTC echo cancellation uses the actual playback signal. A local speech model is required; buffered Groq/Windows fallback pauses capture while playing.
+- **Microphone tuning:** noise reduction, quiet-room calibration, wake sensitivity, pause duration and echo delay. A disconnected named microphone falls back to the Windows default and is rediscovered on the next capture after reconnection.
+- **Verified PC actions:** opening/closing apps checks their visible windows; unconfirmed launches and remaining save dialogs are reported honestly. Minimize, maximize, restore and focus check the resulting window state.
+- **In-app actions:** native Spotify search plus accessible search fields and exact-name buttons through Windows UI Automation. Unsupported, ambiguous or protected controls are rejected.
+- **Context and routines:** say “minimize it” after naming an app. Context expires after five minutes. Save up to 30 routines with at most eight supported steps; Stop cancels remaining steps.
+- **Installation and maintenance:** model included with the installer, first-use Settings, per-user uninstall, manual update checks and checksum-verified installer downloads. Hidden UI work is reduced; Diagnostics reports bounded latency samples and current process CPU/RAM.
 
 ## Commands
 
 - “Open Spotify”, “open Discord”, “open WhatsApp”, “open Visual Studio Code”, “list installed apps”.
-- “Close Spotify” or “quit Discord”. This requests a normal close and permits save prompts. Ambiguous windows and protected system/assistant processes are not force-closed.
-- “Shut down my computer”, “restart my laptop”, “put my device to sleep”, “lock my screen”. These have a ten-second countdown; say “cancel”, “cancel power action”, or press **Stop** to cancel. Shutdown does not force unsaved apps to close.
-- “Volume 40 percent”, “mute”, “brightness 60 percent”, “system status”.
-- “Open YouTube”, “open Spotify website”, “search the web for space news”, “weather in Mumbai”.
+- “Close Spotify”, “minimize it”, “maximize Notepad”, “restore Notepad”, “focus Notepad”. Closure uses normal Windows close requests and allows unsaved-work prompts.
+- “Search Spotify for jazz”, “list buttons in Spotify”, “press Play in Spotify”. Button names must match accessible controls in that app. Sending, deleting, purchasing and similar consequential buttons are excluded.
+- “Create routine work: open Notepad; volume 30”, then “run routine work” or “start work”. Use “list routines” or “delete routine work” to manage saved routines. Supported steps: open, window controls, volume and brightness.
+- “Shut down my computer”, “restart my laptop”, “put my device to sleep”, “lock my screen”. A ten-second countdown allows **Stop** or “cancel power action”. Power actions require a direct request and never force-close unsaved apps.
+- “Volume 40 percent”, “mute”, “brightness 60 percent”, “system status”, “take a screenshot”.
+- “Open Spotify website”, “search the web for space news”, “weather in Mumbai”.
 - “Take a note buy batteries”, “set a timer for five minutes”, “remind me tomorrow at 5 pm to call home”.
-- “Remember that I am learning robotics”, “what do you remember about me?”, “take a screenshot”.
+- “Remember that I am learning robotics”, “what do you remember about me?”
 
-Apps come from Windows Start entries, Start/desktop shortcuts and App Paths. Unique short names can resolve longer installed-app names. Portable apps need a Start/desktop shortcut. Missing, ambiguous, elevated or unusual apps may need manual handling. Arbitrary shell commands are not executed. Power actions require direct user commands; model tool calls cannot trigger them.
+App discovery uses Windows Start entries, Start/desktop shortcuts and App Paths. Portable apps need a registered shortcut. Some Store apps, elevated windows and apps without accessible controls require manual handling. Arbitrary shell commands are not executed. Reminders run while the assistant is open; overdue reminders appear next launch.
 
-Reminders run while the app is open; overdue reminders appear on the next launch.
+## Tray, startup and indicator
 
-## Speech
+Minimizing, closing the window or **Hide to tray** keeps the assistant running. Double-click its EXE again or use tray **Show** to restore the existing instance. Tray **Exit** or **Ctrl+Q** quits completely. A small animated blue indicator shows wake detection, listening, processing and speech.
 
-Replies stream into complete spoken sentences. Upcoming sentences render while the current sentence plays. Full replies stay onscreen; very long answers use a bounded spoken excerpt. **Esc** or **Stop** interrupts.
+Enable **Settings → Start with Windows**, then Save, to start quietly after Windows sign-in. Disable the same setting to remove startup. Wake listening has its own remembered switch. Both default off for a new user. Windows’ own Startup Apps setting must also permit launch. Uninstall removes a startup entry only when it points to that installation; personal settings and history remain.
 
-FRIDAY defaults to Emma neural speech; Emily offers an Irish accent, and Sonia a British accent. Optional **Groq expressive voice** may require accepting the Orpheus model terms in your Groq account. Edge is the fallback, followed by Windows speech if online speech fails. This is not an exact reproduction of a film voice.
+## Voice and privacy
 
-The local Vosk detector listens for the name without uploading idle room audio. Activated requests use online transcription. If the local model is missing, the app announces online wake fallback; rerun Setup to install the model. The app pauses capture while answering/speaking to avoid hearing itself, then allows 15 seconds of follow-up listening. Accuracy depends on the microphone, room noise and accent.
+Default neural voices are Emma for FRIDAY and Ryan for ALFRED. Optional Groq expressive speech depends on your account/model access. Online speech falls back to Windows speech when available. These are fan-inspired voices, not exact film voice reproductions.
 
-## Privacy and files
+With the local model, idle wake audio stays on the PC. **Local** transcription is English and stays local; **Auto/Groq/Google** send activated requests to the chosen service. If the wake model is unavailable, online wake fallback is announced. AI conversation and neural speech require internet access. Microphone accuracy, echo cancellation and response speed depend on hardware, room acoustics, accent and network conditions.
 
-Private settings, keys, conversations, notes and reminders live outside this repository:
+Private keys, settings, history, notes, reminders and routines are stored outside the repository in `%LOCALAPPDATA%\FanAssistants\FRIDAY\`. Your Groq key is saved in that folder’s `.env`; no developer key is bundled. Groq receives conversation context and saved facts. Search queries go to the search provider; weather uses Open-Meteo. Diagnostics collects timing/counters rather than recordings or transcripts.
 
-```text
-%LOCALAPPDATA%\FanAssistants\FRIDAY\
-```
+## Development and validation
 
-Settings saves your Groq key there in `.env`. Advanced users can use `.env.example` as a template in that directory or set `GROQ_API_KEY`. Never commit real credentials. Groq receives conversation context and saved facts. Search queries go to the search provider; weather queries go to Open-Meteo.
-
-Runtime environments and the wake model also live under Windows app data. This folder is independent of the other assistant's source.
-
-## Validation and build
-
-The current release passed **111 automated tests**, a packaged background launch check and a live AI connection check. See [validation results and known limits](docs/VALIDATION.md) and the [architecture guide](docs/ARCHITECTURE.md).
-
-**Test.bat** runs regression tests with mocked device/network actions. **Check.bat** checks dependencies and makes a small live AI request. **Build.bat** creates:
-
-```text
-%LOCALAPPDATA%\FanAssistants\FRIDAY\build-output\dist\FRIDAY.exe
-```
-
-Distribute the built EXE as a GitHub Release asset. Each EXE includes its Python runtime and dependencies; credentials and user data are never bundled. The optional local wake model is installed separately by Setup.bat; without it the app announces online wake fallback.
-
-With your own Python environment:
+Use Python 3.12 on Windows. **Setup.bat** installs dependencies and the local model; **Start.bat** launches; **Background.bat** starts in the tray; **Test.bat** runs the regression suite. **Check.bat** also checks the live AI connection.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -87,6 +62,13 @@ python friday_app.py
 python -m unittest discover -s tests -v
 python -m pip install -r requirements-build.txt
 python build_exe.py
+python build_installer.py
 ```
 
-This repository contains source, setup scripts and tests. Build.bat generates the EXE locally; runtime environments, private data and keys stay outside the repository. The separate small English model uses Apache 2.0; see [Vosk models](https://alphacephei.com/vosk/models). This fan project is not affiliated with Marvel.
+Installer builds require [Inno Setup 6](https://jrsoftware.org/isinfo.php). Pass `--iscc` to specify its compiler. Build output stays outside Git under `%LOCALAPPDATA%\FanAssistants\FRIDAY\build-output\dist\`.
+
+Use `FRIDAY.exe --check-offline --report diagnostics.json` to check native libraries and the speech model without microphone capture, playback or network access. See [validation results](docs/VALIDATION.md), [architecture](docs/ARCHITECTURE.md) and [third-party notices](docs/THIRD_PARTY.md). Physical microphone quality and support for arbitrary applications are not guaranteed by automated tests.
+
+## Publisher verification
+
+Original publisher: **lkghost327-afk**. The app identifies its publisher in Settings and diagnostics. Releases include an RSA-signed manifest and a pinned public-key verifier. See [ownership and verification](OWNERSHIP.md).

@@ -119,7 +119,7 @@ class ImprovementsTests(unittest.TestCase):
             self.assertNotIn("/f", arguments)
 
     def test_failed_online_voice_does_not_retry_for_every_long_sentence(self):
-        voice = VoiceService(Settings(), Mock())
+        voice = VoiceService(Settings(streaming_voice=False, barge_in=False), Mock())
         voice._cloud_retry_after = time.monotonic() + 30
         text = "Long offline reply. " * 40
         with patch.object(voice, "_render_cloud") as cloud, patch.object(voice, "_speak_windows") as local:
@@ -140,7 +140,7 @@ class ImprovementsTests(unittest.TestCase):
         self.assertEqual(window._schedule.call_count, 2)
 
     def test_cancellation_discards_queued_text_and_audio_preparations(self):
-        voice = VoiceService(Settings(), Mock())
+        voice = VoiceService(Settings(streaming_voice=False, barge_in=False), Mock())
         voice.speak("First old reply.", prefetch=True)
         voice.speak("Second old reply.", prefetch=True)
         futures = [future for group in voice._prepared.values() for future in group]
@@ -161,7 +161,7 @@ class ImprovementsTests(unittest.TestCase):
         self.assertEqual(replay.read(512), b"new audio")
 
     def test_transient_microphone_error_recovers_without_disabling_wake(self):
-        voice = VoiceService(Settings(), Mock())
+        voice = VoiceService(Settings(streaming_voice=False, barge_in=False), Mock())
         voice.available = True
         delivered = threading.Event()
         def received(text):
@@ -176,7 +176,7 @@ class ImprovementsTests(unittest.TestCase):
                 voice.close()
 
     def test_next_streamed_sentence_is_rendered_during_current_playback(self):
-        voice = VoiceService(Settings(), Mock())
+        voice = VoiceService(Settings(streaming_voice=False, barge_in=False), Mock())
         voice.available = False
         second_ready = threading.Event()
         finished = threading.Event()

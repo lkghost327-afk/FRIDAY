@@ -166,6 +166,23 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn("Obsolete answer", self.controller.voice.spoken)
         self.assertEqual(len(self.controller.memory.snapshot()[0]), 2)
 
+    def test_new_request_keeps_old_actions_cancelled(self):
+        entered, release = threading.Event(), threading.Event()
+        observed = []
+        def action(text):
+            if text == 'long routine':
+                entered.set()
+                release.wait(2)
+                observed.append(self.controller.router.cancelled())
+            return 'Finished'
+        with patch.object(self.controller, '_local_reply', side_effect=action):
+            self.controller.submit('long routine')
+            self.assertTrue(entered.wait(1))
+            self.controller.submit('replacement request')
+            release.set()
+            self.wait_done()
+        self.assertEqual(observed, [True])
+
     def test_model_errors_are_visible_and_not_saved_as_conversation(self):
         with patch.object(self.controller.brain, "answer", side_effect=BrainError("Update key in Settings")):
             self.controller.submit("explain stars")
