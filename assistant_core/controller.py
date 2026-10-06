@@ -59,6 +59,8 @@ class AssistantController:
             handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
             self.log.addHandler(handler)
         self.voice = VoiceService(self.settings, self.emit)
+        from .device_watch import DeviceWatch
+        self._device_watch = DeviceWatch(self._device_event)
         self.router = ActionRouter(self.base_dir, persona, self.emit)
         self.router.cancelled = lambda: self._cancel.is_set()
         if startup_error is not None:
@@ -83,6 +85,12 @@ class AssistantController:
         if self._started:
             return
         self._started = True
+        self._device_watch.start()
+        from .maintenance import recovery_status
+        from . import __version__
+        recovery = recovery_status(self.base_dir, __version__)
+        if recovery:
+            self.emit('notice', message=recovery)
         history, _ = self.memory.snapshot()
         for message in history:
             self.emit("message", role=message["role"], text=message["content"])
@@ -100,7 +108,7 @@ class AssistantController:
         self._worker.start()
         self.emit("status", state="standby" if self._wake_enabled else "ready",
                   detail=f"Say {self.settings.persona}, followed by your question." if self._wake_enabled else "Type a message or press Talk")
-        self.log.info("Started version 5.0; wake listening %s", "enabled" if self._wake_enabled else "disabled")
+        self.log.info("Started version %s; wake listening %s", __version__, "enabled" if self._wake_enabled else "disabled")
         def warmup():
             try:
                 self.router._installed_apps()
@@ -111,6 +119,10 @@ class AssistantController:
         threading.Thread(target=warmup, name="assistant-warmup", daemon=True).start()
 
     def _strip_name(self, text):
+        from .voice import strip_wake_word
+        detected, command = strip_wake_word(text, self.settings.persona)
+        if detected:
+            return command
         word = "alfred" if self.settings.persona == "alfred" else r"f\.?\s*r\.?\s*i\.?\s*d\.?\s*a\.?\s*y\.?"
         return re.sub(r"^(?:hey\s+|okay\s+|ok\s+)?" + word + r"\b[\s,.:!?]*", "", text, flags=re.I).strip()
 
@@ -121,7 +133,8 @@ class AssistantController:
         if len(text) > 8000:
             self.emit("notice", message="Please keep each message under 8,000 characters.")
             return
-        if text.casefold().strip(".!?") in {"stop", "cancel", "be quiet", "stop talking"}:
+        from .languages import is_stop
+        if is_stop(text):
             self.stop()
             return
         if text.casefold().strip(".!?") in {"go to sleep", "stand by", "standby", "that's all", "that is all"}:
@@ -298,6 +311,40 @@ class AssistantController:
         self.stop(announce=False)
         self.voice.calibrate()
 
+    def test_microphone(self):
+        self.stop(announce=False)
+        self.voice.test_microphone()
+
+    def _device_event(self, event):
+        if self._closed.is_set():
+            return
+        self.stop(announce=False)
+        self.router.desktop.last_app = None
+        self.router.desktop.selections.clear()
+        if event == 'suspend':
+            self.voice._suspended.set()
+            self.emit('status', state='standby', detail='Windows is suspending')
+            return
+        self.voice._suspended.clear()
+        self.voice.recover_devices()
+        self.emit('notice', message='Audio devices refreshed. Previous requests were cancelled; wake listening follows your saved preference.')
+        self.emit('status', state='standby' if self._wake_enabled else 'ready', detail='Ready after device recovery')
+
+    def prepare_update(self, path):
+        from .maintenance import prepare_install
+        from . import __version__
+        if self.pending_update is None:
+            raise ValueError('Check for updates and download the verified installer first.')
+        return prepare_install(path, self.pending_update, self.base_dir, __version__)
+
+    def restore_update_settings(self):
+        from .maintenance import restore_settings
+        settings = restore_settings(self.base_dir, self.settings.persona)
+        from dataclasses import asdict
+        values = asdict(settings)
+        values.pop('persona')
+        self.save_settings(values)
+
     def save_calibration(self, threshold):
         self.settings = self.settings.updated({'microphone_threshold': threshold})
         self.settings.save(self.base_dir)
@@ -339,6 +386,17 @@ class AssistantController:
         self.stop(announce=False)
         self.voice.speak("At your service, Sir. Your voice system is ready." if self.settings.persona == "alfred"
                          else "Voice check. Ready when you are, boss.")
+
+    def verify_ai_key(self, key):
+        """Verify a candidate key without replacing the active settings first."""
+        key = str(key or '').strip()
+        if not key:
+            raise ValueError('Enter your Groq API key, or choose limited offline mode.')
+        candidate = self.settings.updated({'api_key': key})
+        try:
+            return Brain(candidate).check_connection()
+        except BrainError as error:
+            raise ValueError(str(error)) from None
 
     def diagnostics(self):
         if self._diagnosing.is_set():
@@ -385,6 +443,7 @@ class AssistantController:
         if self._closed.is_set():
             return
         self._closed.set()
+        self._device_watch.close()
         self.stop(announce=False)
         self.voice.close()
         self.router.close()

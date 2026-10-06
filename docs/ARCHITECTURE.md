@@ -30,3 +30,13 @@ The brain reconstructs streaming content and tool calls. `streaming.py` queues c
 `maintenance.py` bounds model downloads and archive expansion, validates paths, checks fixed-repository update URLs and verifies asset size/SHA-256 before offering installation. `metrics.py` retains at most 100 timing samples per metric in memory without transcripts.
 
 The Inno installer uses a PyInstaller directory payload to avoid repeated one-file extraction. It includes the English model and installs per-user. The portable EXE uses first-run model setup. Both retain personal state outside installation folders.
+
+## Version 5.1 additions
+
+`recognition.py` owns optional Deepgram WebSocket streaming, bounded audio queues, final-segment assembly and cancellation. Interim text is display-only. `languages.py` normalizes a limited Hindi/Hinglish command vocabulary; unmatched conversation goes to the brain. Hindi and automatic-language recognition use online providers, while idle wake audio remains local. Hindi replies select Edge Swara/Madhur. Explicit provider choices do not silently switch services.
+
+`automation_worker.py` runs each UI Automation request in a separate process and revalidates the window's handle, PID and process start time. Keyboard input requires foreground ownership. Cancellation or timeout terminates and reaps the worker. `media_sessions.py` selects only Spotify's Windows media session, never the global player. Numbered window selections expire after 60 seconds.
+
+`device_watch.py` receives native audio endpoint and Windows power notifications. Recovery invalidates stale requests and resets capture on the microphone thread. It does not repeatedly enumerate PortAudio devices. Setup exposes microphone level/calibration, voice previews, language and provider settings.
+
+`release_identity.py` verifies signed manifests against the existing pinned publisher key. The updater checks the signature, repository, version, installer size and hash again before execution. A non-secret settings checkpoint supports recovery after an incomplete update. Stable update discovery excludes prereleases; rollback of executable binaries is not automatic.

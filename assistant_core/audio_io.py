@@ -79,33 +79,57 @@ class AcousticProcessor:
             return b''.join(self.processor.process_stream(pcm[i:i+320]) for i in range(0, len(pcm), 320))
 
 
-def stream_edge(text, voice, valid, on_pcm, on_start, output_active, echo_active):
+class EdgeAudio:
+    """One bounded, cancellable sentence. Can be prepared while another plays."""
+    def __init__(self, text, voice, valid):
+        self.text, self.voice, self.valid = text, voice, valid
+        self.stop = threading.Event()
+        self.loop = self.task = None
+        self.pipe = AudioPipe(self.alive)
+        self.worker = threading.Thread(target=self._network, name='streaming-tts', daemon=True)
+        self.worker.start()
+
+    def alive(self):
+        return self.valid() and not self.stop.is_set()
+
+    def close(self):
+        self.stop.set()
+        self.pipe.finish()
+        if self.loop is not None and self.task is not None:
+            try:
+                self.loop.call_soon_threadsafe(self.task.cancel)
+            except RuntimeError:
+                pass
+
+    async def _produce(self):
+        import edge_tts
+        self.loop, self.task = asyncio.get_running_loop(), asyncio.current_task()
+        try:
+            if not self.alive():
+                return
+            client = edge_tts.Communicate(self.text, self.voice, rate='-2%', connect_timeout=6, receive_timeout=10)
+            async for chunk in client.stream():
+                if not self.alive():
+                    break
+                if chunk['type'] == 'audio':
+                    self.pipe.write(chunk['data'])
+            self.pipe.finish()
+        except asyncio.CancelledError:
+            self.pipe.finish()
+        except Exception as error:
+            self.pipe.finish(error)
+
+    def _network(self):
+        asyncio.run(self._produce())
+
+
+def stream_edge(text, voice, valid, on_pcm, on_start, output_active, echo_active, prepared=None):
     """Decode/play received MP3 chunks while Edge is still generating the rest."""
     import miniaudio
     import pyaudio
-    import edge_tts
-    pipe = AudioPipe(valid)
-    stop = threading.Event()
-    def alive():
-        return valid() and not stop.is_set()
-    pipe.valid = alive
+    source = prepared or EdgeAudio(text, voice, valid)
+    pipe, alive = source.pipe, source.alive
 
-    async def produce():
-        try:
-            client = edge_tts.Communicate(text, voice, rate='-2%', connect_timeout=6, receive_timeout=10)
-            async for chunk in client.stream():
-                if not alive():
-                    break
-                if chunk['type'] == 'audio':
-                    pipe.write(chunk['data'])
-            pipe.finish()
-        except Exception as error:
-            pipe.finish(error)
-
-    def network():
-        asyncio.run(produce())
-    producer = threading.Thread(target=network, name='streaming-tts', daemon=True)
-    producer.start()
     audio = None
     output = None
     decoder = None
@@ -140,8 +164,7 @@ def stream_edge(text, voice, valid, on_pcm, on_start, output_active, echo_active
             raise PartialPlaybackError('Speech stream interrupted') from error
         raise
     finally:
-        stop.set()
-        pipe.finish()
+        source.close()
         for resource, method in ((decoder, 'close'), (output, 'stop_stream'), (output, 'close'), (audio, 'terminate')):
             if resource is not None:
                 try:
@@ -150,6 +173,31 @@ def stream_edge(text, voice, valid, on_pcm, on_start, output_active, echo_active
                     pass
         echo_active.clear()
         output_active.clear()
+
+
+def stream_edge_segments(segments, voice, valid, on_pcm, on_start, output_active, echo_active):
+    """Start the next sentence after first audio, eliminating repeated network gaps."""
+    pending = {}
+    played = False
+    try:
+        for index, text in enumerate(segments):
+            if not valid():
+                return
+            source = pending.pop(index, None) or EdgeAudio(text, voice, valid)
+            def started():
+                nonlocal played
+                played = True
+                on_start()
+                if index + 1 < len(segments) and valid():
+                    pending[index+1] = EdgeAudio(segments[index+1], voice, valid)
+            stream_edge(text, voice, valid, on_pcm, started, output_active, echo_active, prepared=source)
+    except Exception as error:
+        if played:
+            raise PartialPlaybackError('Speech stream interrupted') from error
+        raise
+    finally:
+        for source in pending.values():
+            source.close()
 
 
 class PartialPlaybackError(OSError):

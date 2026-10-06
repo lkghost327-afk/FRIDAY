@@ -2,16 +2,22 @@
 
 An independent Iron Man fan assistant for Windows: natural conversation, streamed speech, local wake detection and useful PC controls.
 
-**[Download FRIDAY-Setup.exe](https://github.com/lkghost327-afk/FRIDAY/releases/latest/download/FRIDAY-Setup.exe)** · [Portable EXE](https://github.com/lkghost327-afk/FRIDAY/releases/latest/download/FRIDAY.exe) · [First-run guide](docs/FIRST_RUN.md) · [All releases](https://github.com/lkghost327-afk/FRIDAY/releases) · [ALFRED](https://github.com/lkghost327-afk/ALFRED)
+**[Download FRIDAY v5.1 beta installer](https://github.com/lkghost327-afk/FRIDAY/releases/download/v5.1.0-beta.1/FRIDAY-Setup.exe)** · [Portable EXE](https://github.com/lkghost327-afk/FRIDAY/releases/download/v5.1.0-beta.1/FRIDAY.exe) · [First-run guide](docs/FIRST_RUN.md) · [All releases](https://github.com/lkghost327-afk/FRIDAY/releases) · [ALFRED](https://github.com/lkghost327-afk/ALFRED)
+
+The new features below are in **v5.1.0-beta.1**. [Stable v5.0.0](https://github.com/lkghost327-afk/FRIDAY/releases/tag/v5.0.0) remains available.
 
 ## Start on Windows
 
 1. Download **FRIDAY-Setup.exe** for Windows 10/11 x64. It includes Python, dependencies and the English speech model. Install for your Windows account; administrator access is not required.
-2. Launch FRIDAY. Settings opens on first use. Choose your microphone, save, then use **Test / calibrate saved microphone** and stay quiet for two seconds.
-3. Add your own [Groq API key](https://console.groq.com/keys) for AI conversation. Local typed PC commands work without a key. Choose **local** recognition for English voice commands without uploading the recording.
+2. Launch FRIDAY. A guided microphone, voice and connection setup opens on first use. Choose your microphone, save, then use **Test / calibrate saved microphone** and stay quiet for two seconds.
+3. Enter your own [Groq API key](https://console.groq.com/keys). Setup verifies it before enabling AI conversation. You may instead choose limited offline mode for local PC commands. Choose **local** recognition for English voice commands without uploading the recording.
 4. Press **Talk**, or enable **Wake word** and say “Friday, open Spotify”. Only enable wake listening in one assistant at a time.
 
-The optional portable EXE needs no Python installation. Its first run downloads the speech model, or use **Settings → Install local wake model**. Keep it in a permanent folder if enabling startup. Releases are unsigned; SHA256SUMS.txt is provided for checking downloads. Download a release asset, not GitHub’s source-code ZIP.
+The optional portable EXE needs no Python installation and downloads no model automatically. Use **Settings → Install local wake model** only if you explicitly want offline wake listening. Keep it in a permanent folder if enabling startup. EXEs are not Windows Authenticode-signed; release manifests are publisher-signed; SHA256SUMS.txt is provided for checking downloads. Download a release asset, not GitHub’s source-code ZIP.
+
+## v5.1 beta
+
+[Download v5.1.0-beta.1](https://github.com/lkghost327-afk/FRIDAY/releases/tag/v5.1.0-beta.1) for Hindi/Hinglish recognition and commands, optional live transcription, Spotify and app navigation, guided setup and signed updates. See the [beta guide](docs/V5.1.md) and [validation status](docs/VALIDATION-v5.1.md). Stable v5 remains available.
 
 ## What is new in version 5
 
@@ -47,9 +53,9 @@ Enable **Settings → Start with Windows**, then Save, to start quietly after Wi
 
 Default neural voices are Emma for FRIDAY and Ryan for ALFRED. Optional Groq expressive speech depends on your account/model access. Online speech falls back to Windows speech when available. These are fan-inspired voices, not exact film voice reproductions.
 
-With the local model, idle wake audio stays on the PC. **Local** transcription is English and stays local; **Auto/Groq/Google** send activated requests to the chosen service. If the wake model is unavailable, online wake fallback is announced. AI conversation and neural speech require internet access. Microphone accuracy, echo cancellation and response speed depend on hardware, room acoustics, accent and network conditions.
+With the local model, idle wake audio stays on the PC. **Local** transcription is English and stays local; **Auto/Groq/Google/Deepgram** send activated requests to the chosen service. If the wake model is unavailable, standby audio is never uploaded; install the model or use Talk. AI conversation and neural speech require internet access. Microphone accuracy, echo cancellation and response speed depend on hardware, room acoustics, accent and network conditions.
 
-Private keys, settings, history, notes, reminders and routines are stored outside the repository in `%LOCALAPPDATA%\FanAssistants\FRIDAY\`. Your Groq key is saved in that folder’s `.env`; no developer key is bundled. Groq receives conversation context and saved facts. Search queries go to the search provider; weather uses Open-Meteo. Diagnostics collects timing/counters rather than recordings or transcripts.
+Private keys, settings, history, notes, reminders and routines are stored outside the repository in `%LOCALAPPDATA%\FanAssistants\FRIDAY\`. Your Groq and optional Deepgram keys are saved in that folder’s `.env`; no developer key is bundled. Groq receives conversation context and saved facts. Search queries go to the search provider; weather uses Open-Meteo. Diagnostics collects timing/counters rather than recordings or transcripts.
 
 ## Development and validation
 

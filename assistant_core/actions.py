@@ -140,6 +140,13 @@ def _tool(name: str, description: str, properties: dict | None = None, required:
 
 
 TOOL_DEFINITIONS = [
+    _tool('navigate_app', 'Navigate a named supported app. Spotify playback uses its accessible player controls; never assume a track started.',
+          {'app':_string('App name or a listed window number', MAX_APP_NAME),
+           'action':{'type':'string', 'enum':['back','forward','next_tab','previous_tab','new_tab','scroll_up','scroll_down',
+                                            'play','pause','next_track','previous_track','play_first_result',
+                                            'home','library','queue','liked_songs']}}, ('app','action')),
+    _tool("list_app_windows", "List open windows and temporary window numbers for an app.",
+          {"app": _string("App name", MAX_APP_NAME)}, ("app",)),
     _tool("window_control", "Minimize, maximize, restore or focus one unambiguous application window.",
           {"app": _string("App name, or it for the recent app", MAX_APP_NAME),
            "action": {"type": "string", "enum": ["minimize", "maximize", "restore", "focus"]}}, ("app", "action")),
@@ -284,6 +291,8 @@ class ActionRouter:
             return None
         if self._stop.is_set():
             return "The assistant is closing; that action was not performed."
+        from .languages import command as language_command
+        text = language_command(text) or text
         command = text.strip()
         command = re.sub(r"^(?:hey\s+)?(?:f\.?r\.?i\.?d\.?a\.?y\.?|alfred)[,:\s]+", "", command, flags=re.I)
         command = re.sub(r"^(?:(?:please|(?:can|could|would) you)\s+)+", "", command, flags=re.I)
@@ -297,6 +306,21 @@ class ActionRouter:
                 return routine
         except (ValueError, OSError) as error:
             return f'Routine: {error}'
+        navigation = re.fullmatch(r'(?:go )?(back|forward|next tab|previous tab|new tab|scroll up|scroll down|play|pause|next track|previous track|play (?:the )?first result) (?:in|on) (.+)', clean, re.I)
+        if navigation:
+            action = navigation[1].lower().replace('the ', '').replace(' ', '_')
+            return self.execute('navigate_app', {'app':navigation[2], 'action':action})
+        navigation = re.fullmatch(r'(?:go to|open|show) (?:the )?(home|library|queue|liked songs) (?:in|on) (.+)', clean, re.I)
+        if navigation:
+            return self.execute('navigate_app', {'app':navigation[2], 'action':navigation[1].lower().replace(' ', '_')})
+        if lower in {'go back','go forward','next tab','previous tab','new tab','scroll up','scroll down','play','pause','next track','previous track'}:
+            return self.execute('navigate_app', {'app':'it', 'action':lower.removeprefix('go ').replace(' ', '_')})
+        playback = re.fullmatch(r'(play|pause|next track|previous track) spotify', clean, re.I)
+        if playback:
+            return self.execute('navigate_app', {'app':'Spotify', 'action':playback[1].lower().replace(' ', '_')})
+        match = re.fullmatch(r'list windows (?:in|for|of) (.+)', clean, re.I)
+        if match:
+            return self.execute('list_app_windows', {'app':match[1]})
         match = re.fullmatch(r'(minimize|maximize|restore|focus|switch to) (.+)', clean, re.I)
         if match:
             return self.execute('window_control', {'action': 'focus' if match[1].lower() == 'switch to' else match[1].lower(), 'app': match[2]})
@@ -413,6 +437,12 @@ class ActionRouter:
 
     def _window_control(self, app, action):
         return self.desktop.window_control(app, action)
+
+    def _navigate_app(self, app, action):
+        return self.desktop.controls(app, 'navigate', action)
+
+    def _list_app_windows(self, app):
+        return self.desktop.list_windows(app)
 
     def _search_app(self, app, query):
         return self.desktop.controls(app, 'search', query)
@@ -770,6 +800,8 @@ class ActionRouter:
         return None
 
     def _close_app(self, app: str) -> str:
+        if re.fullmatch(r'.+ window \d+', app.strip(), re.I):
+            return self.desktop.close_selected(app)
         if platform.system() != "Windows":
             return "Desktop app closing is currently supported on Windows."
         requested = _normalize_app_name(app)
@@ -823,7 +855,7 @@ class ActionRouter:
         candidates = list(unique.values())
         if len(candidates) != 1:
             return (f"I found {len(candidates)} open windows for {display_name} and did not close any because the target is ambiguous. "
-                    "Close the specific window manually so unsaved work is not lost.")
+                    f"Say list windows in {app}, then close {app} window 1 (or another listed number).")
         if not self._post_window_close(candidates[0].hwnd):
             return f"Windows did not accept a normal close request for {display_name}; nothing was force-closed."
         return (f"Asked {display_name} to close normally. If it has unsaved work, it may show a confirmation prompt; "

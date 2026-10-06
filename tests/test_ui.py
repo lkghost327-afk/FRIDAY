@@ -1,6 +1,7 @@
 """Desktop smoke tests with a fake controller; no microphone or cloud access."""
 
 import queue
+import time
 import unittest
 from unittest import mock
 
@@ -25,6 +26,20 @@ class FakeController:
         self.submitted.append(text)
 
     def listen_once(self):
+        pass
+
+    def test_microphone(self):
+        self.events.put({'kind':'mic_level', 'level':.5, 'clipping':False})
+
+    def test_voice(self):
+        pass
+
+    def verify_ai_key(self, key):
+        if key != 'valid-key':
+            raise ValueError('Groq rejected this API key.')
+        return 'AI connection verified.'
+
+    def calibrate_microphone(self):
         pass
 
     def set_wake_enabled(self, enabled):
@@ -56,6 +71,58 @@ class FakeController:
 
 
 class WindowSmokeTests(unittest.TestCase):
+    def test_guided_setup_and_meter_for_both_personas(self):
+        for persona in ('friday', 'alfred'):
+            with self.subTest(persona=persona):
+                controller = FakeController(persona)
+                with mock.patch('assistant_core.ui.SystemTray.start', return_value=False):
+                    window = AssistantWindow(controller)
+                try:
+                    window.withdraw()
+                    window._open_setup()
+                    dialog = window._dialog
+                    dialog._test(False)
+                    window._poll_events()
+                    self.assertEqual(dialog.level_bar.get(), .5)
+                    dialog._next()
+                    dialog._test_voice()
+                    dialog._next()
+                    dialog.provider.set('deepgram')
+                    dialog._next()
+                    self.assertTrue(dialog.winfo_exists())
+                    self.assertIn('Deepgram key', dialog.message.cget('text'))
+                    dialog.provider.set('local')
+                    dialog._finish_offline()
+                    self.assertTrue(controller.settings.setup_complete)
+                    self.assertEqual(controller.settings.stt_provider, 'local')
+                finally:
+                    window._close()
+
+    def test_first_run_verifies_key_before_full_setup(self):
+        controller = FakeController('friday')
+        with mock.patch('assistant_core.ui.SystemTray.start', return_value=False):
+            window = AssistantWindow(controller)
+        try:
+            window.withdraw()
+            window._open_setup()
+            dialog = window._dialog
+            dialog._next()
+            dialog._next()
+            dialog.provider.set('local')
+            dialog.groq.insert(0, 'valid-key')
+            dialog._next()
+            self.assertFalse(controller.settings.setup_complete)
+            self.assertEqual(controller.settings.api_key, '')
+            deadline = time.monotonic() + 2
+            while dialog.connection_results.empty() and time.monotonic() < deadline:
+                time.sleep(.01)
+            dialog._connection_ready()
+            self.assertTrue(controller.settings.setup_complete)
+            self.assertEqual(controller.settings.api_key, 'valid-key')
+            self.assertFalse(dialog.winfo_exists())
+        finally:
+            window._close()
+
     def test_personas_events_composer_settings_and_shutdown(self):
         for persona in ("friday", "alfred"):
             with self.subTest(persona=persona):

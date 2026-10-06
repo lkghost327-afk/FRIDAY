@@ -1,14 +1,14 @@
 # FRIDAY: first run on Windows
 
 1. Download **FRIDAY-Setup.exe** from [FRIDAY Releases](https://github.com/lkghost327-afk/FRIDAY/releases). Use Windows 10/11 x64. The installer includes Python and the English wake/transcription model and runs without administrator access.
-2. Launch FRIDAY. First-use Settings asks for a microphone and an optional Groq key. Local PC commands do not need an AI key; conversation requires your own key from https://console.groq.com/keys.
+2. Launch FRIDAY. The first-use guide walks through microphone selection, local level/calibration tests, a voice preview and connection setup. Enter your own key from https://console.groq.com/keys and FRIDAY verifies it before completing full setup. You can explicitly choose limited offline mode for local PC commands without open-ended AI conversation.
 3. Select the microphone and Save, then reopen Settings and run **Test / calibrate saved microphone** while staying quiet for two seconds. Allow desktop microphone access in Windows Settings if needed.
 4. Try typing “open Notepad”, then use **Talk**. Choose **local** recognition for local English transcription, or **auto** for a local preview followed by cloud recognition. Enable **Wake word** to say “Friday” before requests.
 5. Default Edge speech streams as it arrives. With the local model, say “stop” or a correction during playback. Tune wake sensitivity, request pause and echo delay if needed. **Esc** and **Stop** also cancel.
 
 ## Portable version
 
-Download **FRIDAY.exe** if you prefer a single file. Keep it in a permanent folder. Python is included; the wake model downloads in the background on first normal launch. You can also select **Settings → Install local wake model**. This requires internet access and about 40 MB of download. The installer already includes the model.
+Download **FRIDAY.exe** if you prefer a single file. Keep it in a permanent folder. Python is included, and no speech model downloads automatically. If you explicitly want offline wake-word listening, select **Settings → Install local wake model**. This requires internet access and about 40 MB of download. The installer already includes the small English wake model.
 
 The model can be installed manually from https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip. Extract its named folder beneath `%LOCALAPPDATA%\FanAssistants\speech-models\`. There must be an `am\final.mdl` inside that model folder.
 
@@ -18,7 +18,7 @@ Close/minimize keeps the assistant in the tray. Double-click its EXE or use tray
 
 **Settings → Start with Windows → Save** enables launch after sign-in; disable and Save to remove it. Enable **Wake word** separately if desired. Both default off. After moving a portable EXE, launch it from the new location once to refresh startup.
 
-**Check for updates** looks for a newer stable GitHub Release. **Download verified update** checks the published SHA-256 and size, then asks whether to run the installer. The application exits before installation. Updates are never installed automatically. Uninstall through Windows Apps; personal settings/history are retained in `%LOCALAPPDATA%\FanAssistants\FRIDAY\`.
+**Check for updates** looks for a newer stable GitHub Release. **Download verified update** verifies the pinned publisher signature and signed installer SHA-256/size, then asks whether to run the installer. A settings checkpoint supports recovery. The application exits before installation. Updates are never installed automatically. Uninstall through Windows Apps; personal settings/history are retained in `%LOCALAPPDATA%\FanAssistants\FRIDAY\`.
 
 ## Troubleshooting
 
@@ -29,8 +29,12 @@ Close/minimize keeps the assistant in the tray. Double-click its EXE or use tray
 - App action unconfirmed: check the app’s window or save dialog. Add a Start/desktop shortcut for portable apps. UI Automation depends on the app exposing accessible controls.
 - Setup/update failed: check internet access and use Releases to download manually. An incomplete manually installed model folder should be renamed before retrying model setup.
 
-Releases are unsigned. Compare `Get-FileHash .\FRIDAY-Setup.exe -Algorithm SHA256` with **SHA256SUMS.txt** in the release. See [validation and limitations](VALIDATION.md) for the checks performed.
+EXEs are not Windows Authenticode-signed; release manifests are publisher-signed. Compare `Get-FileHash .\FRIDAY-Setup.exe -Algorithm SHA256` with **SHA256SUMS.txt** in the release. See [validation and limitations](VALIDATION.md) for the checks performed.
 
 ## Publisher verification
 
 The original publisher is lkghost327-afk. Download all release assets to one folder and run Verify-Release.ps1 from the original repository to verify the pinned publisher key, signed manifest and file hashes. See [ownership verification](../OWNERSHIP.md).
+
+## v5.1 beta: Hindi and app controls
+
+Choose Listening language hi-IN for Hindi, or auto with Groq/Deepgram for Hindi and English. Local recognition is English-only. Deepgram requires a separate optional account/key and may charge for usage. See the repository [beta guide](V5.1.md) for Spotify commands, navigation, privacy and current limitations.

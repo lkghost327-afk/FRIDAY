@@ -187,10 +187,18 @@ class WakeOverlay(tk.Toplevel):
             return
         try:
             import ctypes
+            from ctypes import wintypes
 
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id()) or self.winfo_id()
-            get_style = ctypes.windll.user32.GetWindowLongW
-            set_style = ctypes.windll.user32.SetWindowLongW
+            user32 = ctypes.windll.user32
+            user32.GetParent.argtypes = [wintypes.HWND]
+            user32.GetParent.restype = wintypes.HWND
+            user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+            user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            get_style = user32.GetWindowLongW
+            set_style = user32.SetWindowLongW
             style = get_style(hwnd, -20)
             set_style(hwnd, -20, style | 0x00000080 | 0x08000000)
             ctypes.windll.user32.SetWindowPos(

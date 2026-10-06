@@ -24,20 +24,21 @@ from assistant_core.voice import VoiceService
 
 class UpgradeTests(unittest.TestCase):
     def test_search_verifies_edit_value_not_accessible_label(self):
-        desktop = DesktopActions(Mock())
+        from assistant_core.automation_worker import automate
         field = Mock()
-        field.window_text.return_value = 'Search'
+        field.element_info.name = 'Search'
+        field.window_text.return_value = 'previous query'
         field.get_value.return_value = 'test query'
-        target = NS(pid=-1, process_name='example.exe', hwnd=123)
-        with patch.object(desktop, 'one', return_value=target), patch('pywinauto.Desktop') as automation:
+        target = {'process': 'example.exe', 'hwnd':123}
+        with patch('assistant_core.automation_worker.validate'), patch('pywinauto.Desktop') as automation:
             automation.return_value.window.return_value.wrapper_object.return_value.descendants.return_value = [field]
-            self.assertIn('submitted', desktop.controls('Example', 'search', 'test query'))
+            self.assertIn('submitted', automate(target, 'Example', 'search', 'test query'))
             field.set_edit_text.assert_called_once_with('test query')
-            field.type_keys.assert_called_once_with('{ENTER}')
+            field.type_keys.assert_called_once_with('{ENTER}', set_foreground=False)
             field.type_keys.reset_mock()
             field.get_value.return_value = 'unchanged'
             with self.assertRaises(ValueError):
-                desktop.controls('Example', 'search', 'test query')
+                automate(target, 'Example', 'search', 'test query')
             field.type_keys.assert_not_called()
 
     def test_uia_refuses_assistant_or_system_windows(self):
@@ -260,8 +261,9 @@ class UpgradeTests(unittest.TestCase):
         response.__enter__=Mock(return_value=response)
         response.__exit__=Mock(return_value=None)
         response.iter_content.return_value=[data]
-        update={'name':'FRIDAY-Setup.exe','size':len(data),'digest':'0'*64,'url':'https://github.com/example'}
-        with tempfile.TemporaryDirectory() as folder, patch('assistant_core.maintenance.requests.get',return_value=response):
+        from release_fixture import signed_update
+        with tempfile.TemporaryDirectory() as folder, signed_update(data) as update, patch('assistant_core.maintenance.requests.get',return_value=response):
+            update['digest'] = '0'*64
             with self.assertRaises(ValueError):
                 download_update(update,folder)
             self.assertEqual(list(Path(folder).iterdir()),[])

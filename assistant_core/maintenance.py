@@ -1,5 +1,7 @@
 """Wake-model setup and checksum-verified updates from this project's releases."""
 import hashlib
+import base64
+import json
 from pathlib import Path
 import re
 import shutil
@@ -56,10 +58,54 @@ def install_wake(emit=lambda text: None, cancelled=lambda: False):
 
 
 def version_tuple(value):
-    match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', value)
+    match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?', value)
     if not match:
         raise ValueError('The release does not use a supported stable version.')
-    return tuple(map(int, match.groups()))
+    major, minor, patch, beta = match.groups()
+    return (int(major), int(minor), int(patch), 0 if beta is not None else 1, int(beta or 0))
+
+
+def _asset(release, name, filename, limit):
+    matches = [a for a in release.get('assets', []) if a.get('name') == filename]
+    if len(matches) != 1:
+        raise ValueError('The release is missing its signed verification assets.')
+    asset = matches[0]
+    parsed = urlparse(asset['browser_download_url'])
+    expected = f'/lkghost327-afk/{name}/releases/download/{release["tag_name"]}/{filename}'
+    if parsed.scheme != 'https' or parsed.netloc != 'github.com' or parsed.path != expected or parsed.query or parsed.fragment:
+        raise ValueError('Unexpected update download origin')
+    if type(asset.get('size')) is not int or not 0 < asset['size'] <= limit:
+        raise ValueError('Unexpected update asset size')
+    return asset
+
+
+def _small_download(asset, limit):
+    data = bytearray()
+    with requests.get(asset['browser_download_url'], stream=True, timeout=(5, 15)) as response:
+        response.raise_for_status()
+        for chunk in response.iter_content(8192):
+            data.extend(chunk)
+            if len(data) > limit:
+                raise ValueError('Release verification data exceeds its size limit.')
+    if len(data) != asset['size']:
+        raise ValueError('Release verification data is incomplete.')
+    return bytes(data)
+
+
+def authenticate_update(update):
+    from .release_identity import verify_manifest
+    name = update['name'].removesuffix('-Setup.exe')
+    try:
+        item = verify_manifest(base64.b64decode(update['manifest'], validate=True),
+            base64.b64decode(update['signature'], validate=True),
+            base64.b64decode(update['public_key'], validate=True), name, update['version'])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('This update has no valid publisher signature.') from None
+    if item['sha256'] != update['digest'] or item['size'] != update['size']:
+        raise ValueError('Installer metadata differs from the signed release.')
+    _asset({'tag_name': update['version'], 'assets': [{'name': update['name'],
+        'size': update['size'], 'browser_download_url': update['url']}]}, name, update['name'], 500*1024*1024)
+    return item
 
 
 def check_update(persona, current):
@@ -72,7 +118,7 @@ def check_update(persona, current):
     release = response.json()
     if release.get('draft') or release.get('prerelease') or version_tuple(release['tag_name']) <= version_tuple(current):
         return None
-    asset = next((a for a in release.get('assets', []) if a['name'] == name+'-Setup.exe'), None)
+    asset = _asset(release, name, name+'-Setup.exe', 500*1024*1024)
     if not asset or not re.fullmatch(r'sha256:[0-9a-f]{64}', asset.get('digest') or ''):
         raise ValueError('This release has no checksum-verified installer. Visit the repository Releases page.')
     parsed = urlparse(asset['browser_download_url'])
@@ -80,15 +126,22 @@ def check_update(persona, current):
         raise ValueError('Unexpected update download origin')
     if not 0 < asset.get('size', 0) <= 500*1024*1024:
         raise ValueError('Unexpected update size')
-    return {'version':release['tag_name'], 'url':asset['browser_download_url'], 'digest':asset['digest'][7:],
-            'size':asset['size'], 'name':name+'-Setup.exe'}
+    update = {'version':release['tag_name'], 'url':asset['browser_download_url'], 'digest':asset['digest'][7:],
+              'size':asset['size'], 'name':name+'-Setup.exe'}
+    for field, filename, limit in (('manifest', 'RELEASE-MANIFEST.json', 65536),
+            ('signature', 'RELEASE-MANIFEST.sig', 4096), ('public_key', 'PUBLISHER-KEY.xml', 8192)):
+        data = _small_download(_asset(release, name, filename, limit), limit)
+        update[field] = base64.b64encode(data).decode('ascii')
+    authenticate_update(update)
+    return update
 
 
 def download_update(update, directory, cancelled=lambda:False):
+    authenticate_update(update)
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / update['name']
-    if target.name != update['name'] or not target.resolve().is_relative_to(directory.resolve()):
+    target = directory / (update['digest'][:16] + '-' + update['name'])
+    if not target.resolve().is_relative_to(directory.resolve()):
         raise ValueError('Invalid update filename')
     digest, size = hashlib.sha256(), 0
     with tempfile.NamedTemporaryFile(dir=directory, suffix='.download', delete=False) as output:
@@ -112,3 +165,53 @@ def download_update(update, directory, cancelled=lambda:False):
             raise
     partial.replace(target)
     return target
+
+
+def prepare_install(path, update, base_dir, current):
+    """Recheck immediately before launch and keep a non-secret recovery checkpoint."""
+    from .settings import atomic_json
+    authenticate_update(update)
+    path, base_dir = Path(path), Path(base_dir)
+    if not path.resolve().is_relative_to((base_dir/'updates').resolve()):
+        raise ValueError('The installer is outside the verified update cache.')
+    with path.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    if path.stat().st_size != update['size'] or digest != update['digest']:
+        raise ValueError('The verified installer has changed. Download it again.')
+    settings = base_dir/'settings.json'
+    if settings.is_file():
+        values = json.loads(settings.read_text(encoding='utf-8'))
+        if not isinstance(values, dict):
+            raise ValueError('Settings could not be checkpointed.')
+        for field in ('api_key', 'deepgram_api_key', 'persona'):
+            values.pop(field, None)
+        atomic_json(base_dir/'updates'/'settings-before-update.json', values)
+    atomic_json(base_dir/'updates'/'pending.json', {'from':current, 'to':update['version'], 'installer':str(path)})
+    return path
+
+
+def recovery_status(base_dir, current):
+    path = Path(base_dir)/'updates'/'pending.json'
+    if not path.is_file():
+        return ''
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+        if version_tuple(current) >= version_tuple(record['to']):
+            path.unlink()
+            return 'Update completed. Your personal data and API keys were preserved.'
+        return 'The previous update has not completed. You can retry it in Settings; your current version and personal data remain available.'
+    except (ValueError, KeyError, OSError):
+        return 'An update recovery record could not be read. Your personal data is unchanged.'
+
+
+def restore_settings(base_dir, persona):
+    from .settings import Settings
+    base_dir = Path(base_dir)
+    path = base_dir/'updates'/'settings-before-update.json'
+    if not path.is_file():
+        raise ValueError('There is no settings checkpoint from an earlier update.')
+    values = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(values, dict) or set(values) & {'api_key', 'deepgram_api_key', 'persona'}:
+        raise ValueError('Invalid settings checkpoint.')
+    settings = Settings.load(base_dir, persona).updated(values)
+    return settings

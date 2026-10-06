@@ -50,10 +50,7 @@ def main(persona, entry_path):
     else:
         controller.start()
         if not controller.settings.setup_complete and not args.background:
-            from .wake import model_directory
-            if not (model_directory() / 'am/final.mdl').is_file():
-                controller.maintenance('wake')
-            window._schedule(700, window._open_settings)
+            window._schedule(700, window._open_setup)
         def poll_launch():
             if window._closed:
                 return
@@ -71,6 +68,8 @@ def main(persona, entry_path):
 
 
 def launch(persona, entry_path):
+    import multiprocessing
+    multiprocessing.freeze_support()
     try:
         return main(persona, entry_path)
     except Exception as error:

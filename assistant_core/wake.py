@@ -1,6 +1,7 @@
 """Local name detection. Only the subsequent request goes to online recognition."""
 from collections import deque
 import json
+import re
 import os
 import sys
 from pathlib import Path
@@ -22,22 +23,32 @@ class LocalWake:
         self.required_hits = 1 if sensitivity >= 75 else 2 if sensitivity >= 35 else 3
         self.hits = 0
         self.model = Model(str(model_directory()))
-        self.recognizer = KaldiRecognizer(self.model, 16000, json.dumps([
-            self.name, "hey " + self.name, "hello " + self.name, "okay " + self.name, "[unk]"
-        ]))
+        self._decoder = KaldiRecognizer
+        # A tiny grammar can force unrelated speech into a name. An unrestricted
+        # recognizer must also hear the name at the beginning of the utterance.
+        self.prefix = re.compile(r'^(?:(?:hey|hi|hello|okay|ok)\s+)?' + self.name + r'\b', re.I)
+        self.verified_prefix = re.compile(r'^(?:oh\s+)?(?:(?:hey|hi|hello|okay|ok|a)\s+)?' + self.name + r'\b', re.I)
         self.frames = deque(maxlen=100)  # two seconds of pre-roll at 320 samples
+        self.reset()
 
     def reset(self):
-        self.recognizer.Reset()
+        # Reset() alone retains decoder adaptation from a cut-short wake phrase.
+        # Fresh decoders reuse the expensive model without inheriting stale words.
+        self.recognizer = self._decoder(self.model, 16000, json.dumps([
+            self.name, 'hey '+self.name, 'hello '+self.name, 'okay '+self.name, '[unk]']))
+        self.verifier = self._decoder(self.model, 16000)
         self.frames.clear()
         self.hits = 0
 
     def feed(self, data):
         self.frames.append(data)
         final = self.recognizer.AcceptWaveform(data)
+        verified_final = self.verifier.AcceptWaveform(data)
+        verified = json.loads(self.verifier.Result() if verified_final else self.verifier.PartialResult())
+        verified_text = verified.get('text' if verified_final else 'partial', '').strip()
         result = json.loads(self.recognizer.Result() if final else self.recognizer.PartialResult())
         text = result.get("text" if final else "partial", "").strip()
-        if text in {self.name, "hey " + self.name, "hello " + self.name, "okay " + self.name}:
+        if self.prefix.match(text.removeprefix('[unk] ').strip()) and self.verified_prefix.match(verified_text):
             self.hits += 1
             if final or self.hits >= self.required_hits:
                 return list(self.frames)

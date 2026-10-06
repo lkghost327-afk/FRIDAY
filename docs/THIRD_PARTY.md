@@ -14,8 +14,13 @@ Vosk: https://github.com/alphacep/vosk-api (Apache 2.0).
 miniaudio: https://github.com/irmen/pyminiaudio (MIT; bundled miniaudio public domain or MIT).
 WebRTC audio processing wrapper: https://pypi.org/project/aec-audio-processing/ (BSD 3-Clause).
 pywinauto: https://github.com/pywinauto/pywinauto (BSD 3-Clause).
+aiohttp: https://github.com/aio-libs/aiohttp (Apache 2.0 and MIT).
+cryptography: https://github.com/pyca/cryptography (Apache 2.0 or BSD 3-Clause).
+PyWinRT: https://github.com/pywinrt/pywinrt (MIT; Windows media-session projections).
 Inno Setup: https://jrsoftware.org/isinfo.php (installer compiler; see its distribution license).
 
 Cloud speech and AI services are not bundled models. Their availability, terms and
 account requirements are controlled by their providers. Each user supplies their
-own optional Groq key. No developer credentials are included in any release.
+own optional Groq and Deepgram keys. Deepgram streaming is optional, may incur account charges,
+and opts out of model-improvement usage through the request parameter. The provider's account
+terms and retention policies still apply. No developer credentials are included in any release.

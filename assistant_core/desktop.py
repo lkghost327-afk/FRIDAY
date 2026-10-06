@@ -11,6 +11,16 @@ class DesktopActions:
         self.router = router
         self.last_app = None
         self.last_used = 0.0
+        self.selections = {}
+
+    def list_windows(self, app):
+        from .automation_worker import identity
+        windows = self.windows(app)
+        snapshot = [identity(window) for window in windows]
+        self.selections[app.casefold().strip()] = (time.monotonic(), snapshot)
+        if not windows:
+            return f'No open windows for {app}.'
+        return '\n'.join(f'{app} window {index}: {window.title}' for index, window in enumerate(windows, 1)) + '\nUse that window number within 60 seconds.'
 
     def resolve_reference(self, app):
         if app.lower().strip() in {'it', 'that', 'that app', 'this app', 'the app'}:
@@ -28,6 +38,8 @@ class DesktopActions:
         normalized = _normalize_app_name(app)
         canonical = APP_ALIASES.get(normalized, normalized)
         identities = {_process_identity(canonical), _process_identity(normalized)}
+        if canonical == 'browser':
+            identities.update({'chrome', 'msedge', 'firefox'})
         installed, issue = self.router._resolve_installed_app(app)
         if issue:
             raise ValueError(issue)
@@ -45,11 +57,24 @@ class DesktopActions:
         return result
 
     def one(self, app):
+        selector = re.fullmatch(r'(.+?) window (\d+)', app.strip(), re.I)
+        if selector:
+            from .automation_worker import validate
+            name, number = selector.group(1), int(selector.group(2))
+            when, snapshot = self.selections.get(name.casefold().strip(), (0, []))
+            if time.monotonic() - when > 60 or not 1 <= number <= len(snapshot):
+                raise ValueError(f'List windows in {name} first; window numbers expire after 60 seconds.')
+            chosen = snapshot[number - 1]
+            validate(chosen)
+            for window in self.windows(name):
+                if window.hwnd == chosen['hwnd'] and window.pid == chosen['pid']:
+                    return window
+            raise ValueError('The selected window changed. List windows again.')
         windows = self.windows(app)
         if not windows:
             raise ValueError(f'No open window for {app}. Open it first.')
         if len(windows) != 1:
-            raise ValueError(f'{app} has {len(windows)} windows. Make the target unambiguous first.')
+            raise ValueError(f'{app} has {len(windows)} windows. Say list windows in {app}, then use {app} window 1 (or another listed number).')
         return windows[0]
 
     def verify(self, app, opened, timeout=2.5):
@@ -93,48 +118,35 @@ class DesktopActions:
         self.remember(app)
         return f'{action.title()} {app}: ' + ('confirmed.' if confirmed else 'requested; Windows has not confirmed the change.')
 
-    def controls(self, app, operation, text=''):
-        """Use exact accessible control names; never coordinate-click or type a shell command."""
+    def close_selected(self, app):
         from .actions import NEVER_CLOSE_PROCESSES, _process_identity
-        app = self.resolve_reference(app)
         target = self.one(app)
         if target.pid == os.getpid() or _process_identity(target.process_name) in NEVER_CLOSE_PROCESSES:
             raise ValueError('That system or assistant window is protected.')
-        if operation not in {'list', 'search', 'button'}:
-            raise ValueError('Choose list, search or button.')
-        if operation == 'search' and app.casefold() == 'spotify':
-            os.startfile('spotify:search:' + quote(text, safe=''))
-            self.remember(app)
-            return f'Asked Spotify to search for {text}.'
-        import pythoncom
-        pythoncom.CoInitialize()
-        try:
-            from pywinauto import Desktop
-            window = Desktop(backend='uia').window(handle=target.hwnd).wrapper_object()
-            if operation == 'list':
-                names = [c.window_text() for c in window.descendants(control_type='Button', depth=6)
-                         if c.is_visible() and c.is_enabled() and c.window_text()]
-                return 'Available buttons: ' + ', '.join(dict.fromkeys(names[:40])) if names else 'No accessible buttons found.'
-            if operation == 'search':
-                candidates = [c for c in window.descendants(control_type='Edit', depth=6)
-                              if 'search' in c.window_text().casefold() and c.is_visible() and c.is_enabled()]
-                if len(candidates) != 1:
-                    raise ValueError('I could not identify one accessible Search field in that app.')
-                candidates[0].set_edit_text(text)
-                if candidates[0].get_value() != text:
-                    raise ValueError('The app did not confirm the search text.')
-                candidates[0].type_keys('{ENTER}')
-                result = f'Entered and submitted the search in {app}.'
-            else:
-                if re.search(r'\b(send|delete|remove|buy|pay|purchase|confirm|install|transfer|format)\b', text, re.I):
-                    raise ValueError('Use the app directly for that consequential button.')
-                candidates = [c for c in window.descendants(control_type='Button', depth=6)
-                              if c.window_text().casefold() == text.casefold() and c.is_visible() and c.is_enabled()]
-                if len(candidates) != 1:
-                    raise ValueError('I could not identify one enabled button with that exact name. Try list buttons in the app.')
-                candidates[0].invoke()
-                result = f'The {text} button in {app} accepted the action.'
-            self.remember(app)
-            return result
-        finally:
-            pythoncom.CoUninitialize()
+        if self.router.cancelled():
+            raise ValueError('App action cancelled.')
+        if not self.router._post_window_close(target.hwnd):
+            raise ValueError('Windows did not accept the close request.')
+        deadline = time.monotonic() + 2.5
+        while not self.router.cancelled() and not self.router._stop.is_set():
+            if not any(w.hwnd == target.hwnd and w.pid == target.pid for w in self.router._user_windows()):
+                return f'Confirmed: {app} closed.'
+            if time.monotonic() >= deadline:
+                break
+            self.router._stop.wait(.1)
+        return f'Close requested for {app}; it may be waiting for an unsaved-work prompt. Nothing was force-closed.'
+
+    def controls(self, app, operation, text=''):
+        from .actions import NEVER_CLOSE_PROCESSES, _process_identity
+        from .automation_worker import automate, identity, isolated
+        app = self.resolve_reference(app)
+        target = self.one(app)
+        process = _process_identity(target.process_name)
+        if target.pid == os.getpid() or (process in NEVER_CLOSE_PROCESSES and process != 'explorer'):
+            raise ValueError('That system or assistant window is protected.')
+        if operation not in {'list', 'search', 'button', 'navigate'} or len(text) > 2000:
+            raise ValueError('Choose list, search, button or navigation, with at most 2,000 characters.')
+        # Capture the bound request callback; newer conversation jobs cannot revive this job.
+        result = isolated(automate, (identity(target), app, operation, text), self.router.cancelled)
+        self.remember(app)
+        return result

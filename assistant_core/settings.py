@@ -28,6 +28,7 @@ class Settings:
     persona: str = "friday"
     model: str = "auto"
     api_key: str = ""
+    deepgram_api_key: str = ""
     voice: str = "en-US-EmmaMultilingualNeural"
     voice_provider: str = "edge"
     groq_voice: str = "diana"
@@ -72,7 +73,7 @@ class Settings:
                     values = {}
             except (OSError, ValueError):
                 pass
-        editable = set(asdict(defaults)) - {"persona", "api_key"}
+        editable = set(asdict(defaults)) - {"persona", "api_key", "deepgram_api_key"}
         valid = {k: v for k, v in values.items() if k in editable}
         try:
             settings = defaults.updated(valid)
@@ -80,27 +81,32 @@ class Settings:
             settings = defaults
         env = dotenv_values(base_dir / ".env")
         key = env.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY", "")
-        return replace(settings, api_key=key.strip())
+        deepgram = env.get("DEEPGRAM_API_KEY") or os.environ.get("DEEPGRAM_API_KEY", "")
+        return replace(settings, api_key=key.strip(), deepgram_api_key=deepgram.strip())
 
     def updated(self, values):
         editable = set(asdict(self)) - {"persona"}
         if set(values) - editable:
             raise ValueError("Unknown setting: " + ", ".join(sorted(set(values) - editable)))
         result = replace(self, **values)
-        for field in ("model", "api_key", "voice", "voice_provider", "groq_voice",
+        for field in ("model", "api_key", "deepgram_api_key", "voice", "voice_provider", "groq_voice",
                       "recognition_language", "stt_provider", "microphone_name"):
             value = getattr(result, field)
             if not isinstance(value, str) or "\n" in value or "\r" in value:
                 raise ValueError(f"Invalid {field.replace('_', ' ')}.")
         result = replace(result, model=result.model.strip() or "auto", api_key=result.api_key.strip(), voice=result.voice.strip())
-        if len(result.api_key) > 512 or len(result.model) > 128:
+        if len(result.api_key) > 512 or len(result.deepgram_api_key) > 512 or len(result.model) > 128:
             raise ValueError("API key or model value is too long.")
         if not re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}-[A-Za-z]+Neural", result.voice):
             raise ValueError("Enter an Edge voice such as en-IE-EmilyNeural or en-GB-RyanNeural.")
-        if not re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z]{2,4})?", result.recognition_language):
-            raise ValueError("Use a recognition language such as en-IN, en-US, or hi-IN.")
-        if result.stt_provider not in {"auto", "google", "groq", "local"}:
-            raise ValueError("Choose Auto, Google, Groq or Local speech recognition.")
+        if result.recognition_language != 'auto' and not re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z]{2,4})?", result.recognition_language):
+            raise ValueError("Use auto for Hindi/English, hi-IN for Hindi, or en-IN for English.")
+        if result.stt_provider == 'local' and not result.recognition_language.startswith('en'):
+            raise ValueError('The bundled local model supports English. Select Auto, Groq, Google or Deepgram for Hindi.')
+        if result.stt_provider == 'google' and result.recognition_language == 'auto':
+            raise ValueError('Google recognition needs a language: choose hi-IN for Hindi or en-IN for English.')
+        if result.stt_provider not in {"auto", "google", "groq", "local", "deepgram"}:
+            raise ValueError("Choose Auto, Google, Groq, Local or Deepgram speech recognition.")
         if result.voice_provider not in {"edge", "groq"}:
             raise ValueError("Choose Edge or Groq voice generation.")
         if result.groq_voice not in {"autumn", "diana", "hannah", "austin", "daniel", "troy"}:
@@ -125,10 +131,14 @@ class Settings:
         base_dir.mkdir(parents=True, exist_ok=True)
         values = asdict(self)
         values.pop("api_key")
+        values.pop("deepgram_api_key")
         values.pop("persona")
         # Preserve the existing Spotify and other configuration entries.
         env_path = base_dir / ".env"
         existing = dotenv_values(env_path).get("GROQ_API_KEY", "") if env_path.exists() else ""
         if existing != self.api_key:
             set_key(str(env_path), "GROQ_API_KEY", self.api_key)
+        existing_deepgram = dotenv_values(env_path).get("DEEPGRAM_API_KEY", "") if env_path.exists() else ""
+        if existing_deepgram != self.deepgram_api_key:
+            set_key(str(env_path), "DEEPGRAM_API_KEY", self.deepgram_api_key.strip())
         atomic_json(base_dir / "settings.json", values)

@@ -25,7 +25,7 @@ class ReplySpeech:
                         self.buffer = self.buffer[start:]
                     return
                 self.buffer = self.buffer[:start] + " I've put the code in the conversation. " + self.buffer[end + 3:]
-            match = re.search(r"[.!?](?:[\"')\]]?)(?=\s)", self.buffer)
+            match = re.search(r"[.!?।](?:[\"')\]]?)(?=\s)", self.buffer)
             if not match:
                 # Long sentences may begin after a clause, but never split a URL.
                 match = re.search(r"[,;:]\s", self.buffer[100:200]) if len(self.buffer) > 210 else None

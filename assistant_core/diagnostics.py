@@ -10,7 +10,7 @@ def run_checks(base_dir, persona, live=False):
     modules = {name: importlib.util.find_spec(name) is not None for name in
                ("customtkinter", "groq", "speech_recognition", "pyaudio", "edge_tts", "pygame", "psutil", "pycaw", "ddgs",
                 "PIL.ImageGrab", "screen_brightness_control", "win32com.client", "pythoncom", "pystray", "vosk",
-                "miniaudio", "aec_audio_processing", "pywinauto")}
+                "miniaudio", "aec_audio_processing", "pywinauto", "aiohttp", "cryptography")}
     from .wake import model_directory
     result = {"persona": persona, "dependencies": modules, "key_configured": bool(settings.api_key),
               "configured_model": settings.model, "ok": all(modules.values())}
@@ -24,6 +24,23 @@ def run_checks(base_dir, persona, live=False):
         import miniaudio
         from pywinauto import Desktop
         from .audio_io import AcousticProcessor
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        rsa.RSAPublicNumbers(65537, (1 << 3072) - 1).public_key()
+        from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
+        from .automation_worker import isolated, health_check
+        assert isolated(health_check, (), lambda:False, timeout=15) == 'ready'
+        result['native_media_and_worker'] = 'passed'
+        from .device_watch import DeviceWatch
+        monitor = DeviceWatch(lambda event:None)
+        monitor.start()
+        try:
+            if not monitor.ready.wait(10):
+                raise RuntimeError('Native audio-device notifications unavailable')
+        finally:
+            monitor.close()
+            if monitor.thread:
+                monitor.thread.join(2)
+        result['native_device_notifications'] = 'passed'
         processor = AcousticProcessor()
         processor.playback(bytes(960))
         assert len(processor.capture(bytes(320))) == 320

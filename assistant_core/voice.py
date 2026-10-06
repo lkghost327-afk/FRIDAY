@@ -1,8 +1,7 @@
 """One microphone owner and cancellable speech for both assistant personas.
 
 Importing this module never opens the microphone, starts audio, or needs a key.
-Wake listening is opt-in. Recognition uses an online service, not an offline
-wake-word detector; the settings screen should make that clear.
+Wake listening is local and opt-in. Activated commands use the chosen provider.
 """
 from __future__ import annotations
 
@@ -47,8 +46,8 @@ class _InterruptibleStream:
 
 def strip_wake_word(text: str, persona: str) -> tuple[bool, str]:
     """Preserve a question spoken in the same breath as the assistant name."""
-    name = r"(?:friday|fry\s+day|for\s+i\s+day)" if persona.lower() == "friday" else r"(?:alfred|al\s+fred)"
-    match = re.match(r"^\s*(?:(?:hey|hi|hello|okay|ok)\s+)?" + name + r"\b[\s,.:;!?-]*", text, re.I)
+    name = r"(?:friday|fry\s+day|for\s+i\s+day|फ्राइडे|फ्राइडे़|फ्राइडेय|फ्राईडे)" if persona.lower() == "friday" else r"(?:alfred|al\s+fred|अल्फ्रेड|अलफ़्रेड|अलफ्रेड)"
+    match = re.match(r"^\s*(?:(?:hey|hi|hello|okay|ok|हे|हेलो|हाय)\s+)?" + name + r"(?=$|[\s,.:;!?।-])[\s,.:;!?।-]*", text, re.I)
     return (True, text[match.end():].strip()) if match else (False, text.strip())
 
 
@@ -81,7 +80,7 @@ def split_speech(text: str, limit: int = 300) -> list[str]:
     if not text:
         return []
     limit = max(80, int(limit))
-    units = re.split(r"(?<=[.!?])\s+", text)
+    units = re.split(r"(?<=[.!?।])\s+", text)
     pieces = []
     for unit in units:
         while len(unit) > limit:
@@ -144,6 +143,10 @@ class VoiceService:
         self._microphone_failures = 0
         self._activity = threading.Event()
         self._calibration_request = threading.Event()
+        self._meter_request = threading.Event()
+        self._last_level = 0.0
+        self._reset_audio = threading.Event()
+        self._suspended = threading.Event()
         self._echo_active = threading.Event()
         self._acoustic = None
         self._acoustic_failed = False
@@ -151,6 +154,7 @@ class VoiceService:
         self._mic_cache = (0, [])
         self._last_voice_activity = time.monotonic()
         self._groq_stt = None
+        self._stop_started = None
         from .metrics import Metrics
         self.metrics = Metrics()
         self.available = self._has_module("speech_recognition") and self._has_module("pyaudio")
@@ -263,9 +267,17 @@ class VoiceService:
         self._activity.set()
         self.available = self._has_module("speech_recognition") and self._has_module("pyaudio")
 
+    def recover_devices(self):
+        """Invalidate stale capture; reset native state on the microphone owner."""
+        self.stop()
+        self._reset_audio.set()
+        self._activity.set()
+
     def stop(self, preserve_conversation=False):
         """Invalidate pending work; active stream/playback cancels at next read."""
         with self._lock:
+            if self._output_active.is_set() and self._stop_started is None:
+                self._stop_started = time.monotonic()
             self._speech_generation += 1
             self._capture_generation += 1
             self._speech_pending = 0
@@ -307,7 +319,7 @@ class VoiceService:
             return False
 
     def _capture_valid(self, generation):
-        return (not self._closed.is_set() and generation == self._capture_generation
+        return (not self._closed.is_set() and not self._suspended.is_set() and generation == self._capture_generation
                 and not self.busy.is_set() and not self._output_active.is_set() and not self._model_busy())
 
     def _arm_followup(self):
@@ -321,6 +333,18 @@ class VoiceService:
     def _capture_loop(self):
         while not self._closed.is_set():
             self._activity.clear()
+            if self._suspended.is_set():
+                self._activity.wait(1)
+                continue
+            if self._reset_audio.is_set():
+                self._reset_audio.clear()
+                self._mic_cache = (0, [])
+                self._acoustic = None
+                self._acoustic_failed = False
+                self._barge_frames = []
+                self._local_wake_failed = False
+                self._cloud_retry_after = self._groq_retry_after = self._stt_retry_after = 0
+                self.metrics.count('device_recoveries')
             if not self.available:
                 self._closed.wait(0.3)
                 continue
@@ -351,7 +375,7 @@ class VoiceService:
                 if requested:
                     self._listen_request.clear()
             if not (requested or followup or wake):
-                if self._calibration_request.is_set():
+                if self._calibration_request.is_set() or self._meter_request.is_set():
                     self._calibrate()
                     continue
                 if time.monotonic() - self._last_voice_activity > 60:
@@ -365,7 +389,7 @@ class VoiceService:
                 name = str(self._setting("persona", "friday")).upper()
                 self._status("standby", f"Say {name}, followed by your question.")
             try:
-                if self._calibration_request.is_set():
+                if self._calibration_request.is_set() or self._meter_request.is_set():
                     self._calibrate()
                     continue
                 self._last_voice_activity = time.monotonic()
@@ -415,7 +439,7 @@ class VoiceService:
                 self._local_wake = LocalWake(self._setting("persona", "friday"), self._setting('wake_sensitivity', 50))
             except Exception:
                 self._local_wake_failed = True
-                self._notice("Local wake detection is unavailable. Install the wake model in Settings. Using online wake recognition in the meantime.", cooldown=300)
+                self._notice("Local wake detection is unavailable. Install the wake model in Settings or press Talk. Standby audio will not be uploaded.", cooldown=300)
                 return False
         self._local_wake.reset()
         while self._capture_valid(generation):
@@ -528,22 +552,70 @@ class VoiceService:
         self._calibration_request.set()
         self._activity.set()
 
+    def test_microphone(self):
+        self.stop()
+        self._meter_request.set()
+        self._activity.set()
+
+    def _level(self, pcm):
+        now = time.monotonic()
+        if now - self._last_level >= .1:
+            self._last_level = now
+            rms = audioop.rms(pcm, 2)
+            self._emit('mic_level', level=min(1.0, rms / 6000), clipping=audioop.max(pcm, 2) >= 32000)
+
     def _calibrate(self):
+        calibrating = self._calibration_request.is_set()
         self._calibration_request.clear()
-        self._status('listening', 'Microphone test: stay quiet for two seconds')
+        self._meter_request.clear()
+        token = self._capture_generation
+        self._status('listening', 'Stay quiet for two seconds' if calibrating else 'Speak for five seconds to test your microphone')
         import speech_recognition as sr
         try:
             levels = []
             with sr.Microphone(device_index=self._microphone_device(), sample_rate=16000, chunk_size=320) as source:
-                for _ in range(100):
-                    if self._closed.is_set():
+                for _ in range(100 if calibrating else 250):
+                    if self._closed.is_set() or token != self._capture_generation:
                         return
-                    levels.append(audioop.rms(self._clean_capture(source.stream.read(320)), 2))
-            levels.sort()
-            self._energy_threshold = max(50, min(10000, int(levels[89] * 1.8)))
-            self._emit('calibration', threshold=self._energy_threshold, noise=levels[49])
+                    pcm = source.stream.read(320)
+                    self._level(pcm)
+                    levels.append(audioop.rms(self._clean_capture(pcm), 2))
+            if calibrating:
+                levels.sort()
+                self._energy_threshold = max(50, min(10000, int(levels[89] * 1.8)))
+                self._emit('calibration', threshold=self._energy_threshold, noise=levels[49])
+            else:
+                self._notice('Microphone test finished. No audio was saved or uploaded.', cooldown=0)
         except Exception:
             self._notice('Microphone test failed. Check your input device and Windows microphone access.')
+        finally:
+            self._emit('mic_level', level=0, clipping=False)
+            self._status('standby' if self._wake_enabled else 'ready', 'Microphone test finished')
+
+    def _stream_transcription(self, source, recognizer, generation):
+        from .recognition import StreamingRecognition, RecognitionError
+        session = None
+        try:
+            session = StreamingRecognition(self._setting('deepgram_api_key', ''),
+                self._setting('recognition_language', 'en-IN'), self._setting('pause_seconds', .55),
+                lambda: self._capture_valid(generation),
+                lambda text: self._emit('transcript_partial', text=text))
+            for part in recognizer.listen(source, timeout=7, phrase_time_limit=30, stream=True):
+                session.feed(part.get_raw_data(convert_rate=16000, convert_width=2))
+            started = time.monotonic()
+            self._status('transcribing', 'Finishing live transcription…')
+            text = session.finish()
+            self.metrics.record('streaming_finalize_ms', (time.monotonic() - started) * 1000)
+            self.metrics.count('streaming_transcriptions')
+            return text
+        except RecognitionError as error:
+            if self._capture_valid(generation):
+                self._notice(str(error))
+                self._closed.wait(1)
+            return ''
+        finally:
+            if session is not None:
+                session.close()
 
     def _capture_and_transcribe(self, generation, requested, followup):
         import speech_recognition as sr
@@ -562,11 +634,15 @@ class VoiceService:
                     source.stream = ReplayStream(source.stream, self._barge_frames)
                     self._barge_frames = []
                 if not requested and not followup:
-                    self._listen_for_local_wake(source, generation)
+                    if not self._listen_for_local_wake(source, generation):
+                        self._closed.wait(1)
+                        return ''
                 # Learn from silence inside listen(); a separate calibration read
                 # consumes the start of a command spoken immediately after Talk.
                 try:
-                    decoder = self._command_decoder()
+                    if self._setting('stt_provider') == 'deepgram':
+                        return self._stream_transcription(source, recognizer, generation)
+                    decoder = self._command_decoder() if self._setting('recognition_language', 'en-IN').startswith('en') else None
                     if self._setting('stt_provider') == 'local' and decoder is None:
                         self._notice('Local transcription needs the English wake model. Install it from Settings.')
                         return ''
@@ -600,6 +676,11 @@ class VoiceService:
         self._status("transcribing", "Recognizing speech…")
         transcription_started = time.monotonic()
         try:
+            provider = self._setting('stt_provider', 'auto')
+            if provider == 'groq' and (not self._setting('api_key', '') or time.monotonic() < self._stt_retry_after):
+                self._notice('Groq recognition needs a valid key and an available connection. Check Settings or choose another service.')
+                self._closed.wait(1)
+                return ''
             if (self._setting("stt_provider", "auto") in {"groq", "auto"}
                     and self._setting("api_key", "") and time.monotonic() >= self._stt_retry_after):
                 key = str(self._setting("api_key", "") or "").strip()
@@ -608,12 +689,13 @@ class VoiceService:
                     return ""
                 from groq import Groq
                 language = str(self._setting("recognition_language", "en-IN")).split("-")[0]
+                language_args = {} if language == 'auto' else {'language':language}
                 try:
                     if self._groq_stt is None:
                         self._groq_stt = Groq(api_key=key, timeout=8, max_retries=0)
                     result = self._groq_stt.audio.transcriptions.create(
                             file=("command.wav", audio.get_wav_data(convert_rate=16000), "audio/wav"),
-                            model="whisper-large-v3-turbo", language=language, response_format="verbose_json",
+                            model="whisper-large-v3-turbo", **language_args, response_format="verbose_json",
                             temperature=0,
                             prompt="FRIDAY, Alfred, Spotify, Discord, WhatsApp, Visual Studio Code, Steam, Chrome, Notepad, calculator.")
                     self.metrics.record('transcription_ms', (time.monotonic()-transcription_started)*1000)
@@ -623,8 +705,15 @@ class VoiceService:
                     return str(getattr(result, "text", "")).strip()
                 except Exception:
                     self._stt_retry_after = time.monotonic() + 30
+                    if provider == 'groq':
+                        self._notice('Groq recognition is unavailable. Your recording was not sent to another service.', cooldown=60)
+                        return ''
                     self._notice("Groq recognition is unavailable. Trying Google recognition for this request.", cooldown=60)
-            return recognizer.recognize_google(audio, language=self._setting("recognition_language", "en-IN")).strip()
+            language = self._setting('recognition_language', 'en-IN')
+            if language == 'auto':
+                self._notice('Automatic language detection needs Groq or Deepgram. Auto is using Google Hindi for this request.', cooldown=60)
+                language = 'hi-IN'
+            return recognizer.recognize_google(audio, language=language).strip()
         except sr.UnknownValueError:
             if requested or followup:
                 self._status("ready", "I didn't catch that. Please try again.")
@@ -696,6 +785,15 @@ class VoiceService:
 
     def _speech_loop(self):
         try:
+            # Load native decoders and networking away from Tk, before the first
+            # spoken reply. This opens no device and sends no network request.
+            try:
+                if self._setting('streaming_voice', True) and self._setting('speech_enabled', True):
+                    import miniaudio
+                    import edge_tts
+                    import pyaudio
+            except ImportError:
+                pass
             while not self._closed.is_set():
                 item = self._speech_queue.get()
                 if item is None:
@@ -712,6 +810,9 @@ class VoiceService:
                     self._notice("Audio output is unavailable. The complete answer is still shown in the conversation.")
                 finally:
                     with self._lock:
+                        if self._stop_started is not None and not self._output_active.is_set():
+                            self.metrics.record('playback_stop_ms', (time.monotonic()-self._stop_started)*1000)
+                            self._stop_started = None
                         if generation == self._speech_generation:
                             self._speech_pending = max(0, self._speech_pending - 1)
                             if not self._speech_pending:
@@ -734,16 +835,19 @@ class VoiceService:
                     pass
 
     def _speak_job(self, text, generation):
-        if (self._setting('streaming_voice', True) and self._setting('voice_provider', 'edge') == 'edge'
+        from .languages import is_hindi
+        hindi = is_hindi(text)
+        if (self._setting('streaming_voice', True) and (self._setting('voice_provider', 'edge') == 'edge' or hindi)
                 and time.monotonic() >= self._cloud_retry_after):
-            from .audio_io import stream_edge, PartialPlaybackError
+            from .audio_io import stream_edge, stream_edge_segments, PartialPlaybackError
             try:
-                for segment in split_speech(text, 300):
-                    if not self._speech_valid(generation):
-                        raise _Cancelled()
-                    stream_edge(segment, self._setting('voice', 'en-US-EmmaMultilingualNeural'),
-                                lambda: self._speech_valid(generation), self._playback_reference,
-                                self._audio_started, self._output_active, self._echo_active)
+                segments = split_speech(text, 300)
+                if not self._speech_valid(generation):
+                    raise _Cancelled()
+                speak = stream_edge_segments if len(segments) > 1 else stream_edge
+                speak(segments if len(segments) > 1 else segments[0], self._voice_for(text),
+                      lambda: self._speech_valid(generation), self._playback_reference,
+                      self._audio_started, self._output_active, self._echo_active)
                 return
             except _Cancelled:
                 raise
@@ -786,7 +890,7 @@ class VoiceService:
                         os.unlink(path)
                     except OSError:
                         pass
-        provider = self._setting("voice_provider", "edge")
+        provider = 'edge' if hindi else self._setting("voice_provider", "edge")
         if provider == "edge" and time.monotonic() < self._cloud_retry_after:
             return self._speak_windows(text, generation)
         limit = 190 if provider == "groq" else 210
@@ -938,12 +1042,19 @@ class VoiceService:
         if not self._speech_valid(generation):
             raise _Cancelled()
 
+    def _voice_for(self, text):
+        from .languages import is_hindi
+        selected = self._setting('voice', 'en-US-EmmaMultilingualNeural')
+        if is_hindi(text) and not selected.startswith('hi-'):
+            return 'hi-IN-MadhurNeural' if self._setting('persona') == 'alfred' else 'hi-IN-SwaraNeural'
+        return selected
+
     def _render_cloud(self, text, path, generation):
         import edge_tts
 
         async def render():
             default = "en-US-EmmaMultilingualNeural" if self._setting("persona", "friday") == "friday" else "en-GB-RyanNeural"
-            communicate = edge_tts.Communicate(text, self._setting("voice", default) or default,
+            communicate = edge_tts.Communicate(text, self._voice_for(text) or default,
                                               rate="-2%", pitch="+0Hz", volume="+0%",
                                               connect_timeout=6, receive_timeout=12)
             task = asyncio.create_task(communicate.save(path))
@@ -998,7 +1109,15 @@ class VoiceService:
         if self._sapi is None:
             self._sapi = win32com.client.Dispatch("SAPI.SpVoice")
         target_gender = "female" if self._setting("persona", "friday") == "friday" else "male"
-        for voice in self._sapi.GetVoices():
+        from .languages import is_hindi
+        voices = list(self._sapi.GetVoices())
+        if is_hindi(text):
+            voices = [voice for voice in voices if '439' in voice.GetAttribute('Language').lower().split(';')]
+            if not voices:
+                self._notice('Online Hindi speech is unavailable and no Hindi Windows voice is installed. The reply is on screen.')
+                return
+            self._sapi.Voice = voices[0]
+        for voice in voices:
             try:
                 if voice.GetAttribute("Gender").lower() == target_gender:
                     self._sapi.Voice = voice

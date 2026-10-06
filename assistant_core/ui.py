@@ -326,11 +326,19 @@ class AssistantWindow(ctk.CTk):
                     self.controller.save_calibration(event['threshold'])
                 except (OSError, ValueError):
                     self._append_message('system', 'Microphone tested, but its calibration could not be saved.')
+            elif kind == 'mic_level':
+                dialog = getattr(self, '_dialog', None)
+                if dialog is not None and dialog.winfo_exists() and hasattr(dialog, 'set_level'):
+                    dialog.set_level(event.get('level', 0), event.get('clipping', False))
             elif kind == 'update_ready':
-                if messagebox.askyesno('Update ready', 'The installer checksum is verified. Close this assistant and run the update?', parent=self):
-                    os.startfile(event['path'])
-                    self._exit()
-                    return
+                if messagebox.askyesno('Update ready', 'The publisher signature and installer checksum are verified. Close this assistant and run the update?', parent=self):
+                    try:
+                        path = self.controller.prepare_update(event['path'])
+                        os.startfile(str(path))
+                        self._exit()
+                        return
+                    except (OSError, ValueError) as error:
+                        self._append_message('system', str(error))
             elif kind in {"notice", "error"}:
                 self._append_message("error" if kind == "error" else "system", event.get("message") or event.get("text", ""))
             elif kind in {"config", "settings"}:
@@ -461,7 +469,7 @@ class AssistantWindow(ctk.CTk):
         configured = bool(getattr(settings, "api_key", ""))
         model = getattr(settings, "model", "")
         conversation = f"Groq configured · {model}" if configured else "Local commands available · Add an AI key in Settings"
-        stt = {"auto": "Auto (Groq / Google)", "groq": "Groq", "google": "Google"}.get(getattr(settings, "stt_provider", "auto"), "Auto")
+        stt = {"auto": "Auto (Groq / Google)", "groq": "Groq", "google": "Google", "local": "Local", "deepgram": "Deepgram live"}.get(getattr(settings, "stt_provider", "auto"), "Auto")
         self.connection_label.configure(text=f"{conversation}    /    Speech recognition: {stt}")
 
     def _update_telemetry(self):
@@ -560,6 +568,12 @@ class AssistantWindow(ctk.CTk):
             return
         self._dialog = SettingsDialog(self)
 
+    def _open_setup(self):
+        if self._dialog is not None and self._dialog.winfo_exists():
+            self._dialog.lift()
+            return
+        self._dialog = SetupDialog(self)
+
     def _hide_to_tray(self):
         if self._closed:
             return
@@ -629,11 +643,209 @@ class AssistantWindow(ctk.CTk):
             self.destroy()
 
 
+class SetupDialog(ctk.CTkToplevel):
+    """Three explicit setup steps; testing uses the existing microphone owner."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent, self.controller = parent, parent.controller
+        self.step = 0
+        self.devices = {'System default': (None, '')}
+        self.results = queue.Queue()
+        self.connection_results = queue.Queue()
+        self.verifying = False
+        self.title(f'{parent.name} · First-time setup')
+        self.geometry('650x580')
+        self.minsize(560, 500)
+        self.configure(fg_color=BG)
+        self.transient(parent)
+        self.heading = parent._label(self, '', size=22, bold=True, color=TEXT)
+        self.heading.pack(padx=24, pady=20, anchor='w')
+        self.body = ctk.CTkScrollableFrame(self, fg_color=PANEL)
+        self.body.pack(fill='both', expand=True, padx=20)
+        self.message = parent._label(self, '', size=11, wraplength=580)
+        self.message.pack(padx=20, pady=8)
+        self.next_button = parent._button(self, 'Next', self._next, primary=True)
+        self.next_button.pack(side='right', padx=24, pady=16)
+        self.later_button = parent._button(self, 'Set up later', self.destroy)
+        self.later_button.pack(side='left', padx=24, pady=16)
+        self._render()
+        threading.Thread(target=lambda:self.results.put(self.controller.list_microphones()), daemon=True,
+                         name='setup-device-list').start()
+        parent._schedule(100, self._devices_ready)
+
+    def _label(self, text):
+        widget = self.parent._label(self.body, text, size=12, wraplength=555, justify='left', anchor='w')
+        widget.pack(fill='x', padx=20, pady=9)
+        return widget
+
+    def _entry(self, text, value):
+        self._label(text)
+        entry = ctk.CTkEntry(self.body, show='•', height=35)
+        entry.insert(0, value)
+        entry.pack(fill='x', padx=20, pady=4)
+        return entry
+
+    def _render(self):
+        for widget in self.body.winfo_children():
+            widget.destroy()
+        self.message.configure(text='')
+        settings = self.controller.settings
+        self.heading.configure(text=('1 / 3 · Your microphone', '2 / 3 · Your voice', '3 / 3 · Connections & privacy')[self.step])
+        if self.step == 0:
+            self._label('Choose an input. Test levels while speaking, then calibrate while the room is quiet. These tests stay on this PC.')
+            self.microphone = ctk.CTkComboBox(self.body, values=list(self.devices), state='readonly', width=535)
+            self.microphone.set(next((label for label, pair in self.devices.items()
+                if pair[1] == settings.microphone_name and pair[0] == settings.microphone_index), 'System default'))
+            self.microphone.pack(padx=20, pady=8)
+            self.level_bar = ctk.CTkProgressBar(self.body, progress_color=self.parent.accent)
+            self.level_bar.set(0)
+            self.level_bar.pack(fill='x', padx=20, pady=14)
+            self.parent._button(self.body, 'Save input & test levels', lambda:self._test(False), width=250).pack(pady=8)
+            self.parent._button(self.body, 'Save input & calibrate', lambda:self._test(True), width=250).pack(pady=8)
+            self._label('No microphone? You can still use text chat. Wake listening stays off until you enable it.')
+        elif self.step == 1:
+            self._label('Choose a neural speaking voice. The preview uses Edge online speech; Windows speech is the offline fallback.')
+            self.voice = ctk.CTkComboBox(self.body, values=list(SettingsDialog.VOICES), width=535)
+            self.voice.set(settings.voice)
+            self.voice.pack(padx=20, pady=12)
+            self.parent._button(self.body, 'Save voice & play preview', self._test_voice, width=260).pack(pady=12)
+            self._label('Streaming replies start before the entire answer is generated. More voice and interruption options are in Settings.')
+        else:
+            self._label('Natural conversation needs an AI model. Enter your own Groq key to enable it. Local PC commands can run without a key, but open-ended questions and movie-style conversation will be unavailable.')
+            self.groq = self._entry('Groq API key for natural conversation', settings.api_key)
+            self._label('Create a key at https://console.groq.com/keys. The key is hidden, saved only in your personal app-data folder, and never included in releases or diagnostics.')
+            self.provider = ctk.CTkComboBox(self.body, values=['local', 'auto', 'groq', 'google', 'deepgram'], state='readonly', width=535)
+            self.provider.set(settings.stt_provider)
+            self.provider.pack(padx=20, pady=9)
+            self.language = ctk.CTkComboBox(self.body, values=['en-IN', 'hi-IN', 'auto'], state='readonly', width=535)
+            self.language.set(settings.recognition_language)
+            self.language.pack(padx=20, pady=6)
+            self._label('hi-IN: Hindi · auto: Hindi + English detection (Groq/Deepgram). The local model supports English only.')
+            self.deepgram = self._entry('Deepgram key for live transcription (optional)', settings.deepgram_api_key)
+            self._label('Auto: Groq request audio with Google fallback. Deepgram: activated audio streamed to your account, with model-improvement opt-out; charges and provider retention terms apply. Settings keeps keys outside the project.')
+            self.next_button.configure(text='Verify key & finish')
+            self.later_button.configure(text='Use limited offline mode', command=self._finish_offline)
+
+    def _devices_ready(self):
+        if not self.winfo_exists():
+            return
+        try:
+            devices = self.results.get_nowait()
+        except queue.Empty:
+            self.parent._schedule(100, self._devices_ready)
+            return
+        for index, name in devices:
+            self.devices[f'{index} · {name}'] = (index, name)
+        if self.step == 0:
+            self._render()
+
+    def set_level(self, level, clipping):
+        if self.step == 0:
+            self.level_bar.set(level)
+            self.level_bar.configure(progress_color=ERROR if clipping else self.parent.accent)
+            self.message.configure(text='Input is clipping. Lower the microphone level in Windows.' if clipping else 'Microphone level test (local only)')
+
+    def _save_step(self):
+        if self.step == 0:
+            index, name = self.devices.get(self.microphone.get(), (None, ''))
+            values = {'microphone_index':index, 'microphone_name':name}
+        elif self.step == 1:
+            values = {'voice':self.voice.get(), 'voice_provider':'edge'}
+        else:
+            if self.provider.get() == 'deepgram' and not self.deepgram.get().strip():
+                raise ValueError('Enter your Deepgram key, or choose another recognition service.')
+            values = {'api_key':self.groq.get().strip(), 'deepgram_api_key':self.deepgram.get().strip(),
+                      'stt_provider':self.provider.get(), 'recognition_language':self.language.get(), 'setup_complete':False}
+        if self.step != 2:
+            self.controller.save_settings(values)
+        return values
+
+    def _finish_offline(self):
+        if self.step != 2 or self.verifying:
+            self.destroy()
+            return
+        try:
+            if self.provider.get() == 'deepgram' and not self.deepgram.get().strip():
+                self.provider.set('local')
+                self.language.set('en-IN')
+            self.groq.delete(0, 'end')
+            values = self._save_step()
+            self.controller.save_settings({**values, 'setup_complete':True})
+            self.destroy()
+        except (ValueError, OSError) as error:
+            self.message.configure(text=str(error))
+
+    def _connection_ready(self):
+        if not self.winfo_exists():
+            return
+        try:
+            success, message = self.connection_results.get_nowait()
+        except queue.Empty:
+            self.parent._schedule(100, self._connection_ready)
+            return
+        self.verifying = False
+        if not success:
+            self.next_button.configure(state='normal')
+            self.later_button.configure(state='normal')
+            self.message.configure(text=message)
+            return
+        try:
+            self.controller.save_settings({**self.pending_connection_settings, 'setup_complete':True})
+        except (ValueError, OSError) as error:
+            self.next_button.configure(state='normal')
+            self.later_button.configure(state='normal')
+            self.message.configure(text=str(error))
+            return
+        self.destroy()
+
+    def _test(self, calibrate):
+        try:
+            values = self._save_step()
+            self.controller.calibrate_microphone() if calibrate else self.controller.test_microphone()
+            self.message.configure(text='Stay quiet for two seconds.' if calibrate else 'Speak now for five seconds.')
+        except (ValueError, OSError) as error:
+            self.message.configure(text=str(error))
+
+    def _test_voice(self):
+        try:
+            self._save_step()
+            self.controller.test_voice()
+        except (ValueError, OSError) as error:
+            self.message.configure(text=str(error))
+
+    def _next(self):
+        try:
+            values = self._save_step()
+        except (ValueError, OSError) as error:
+            self.message.configure(text=str(error))
+            return
+        if self.step == 2:
+            key = self.groq.get().strip()
+            if not key:
+                self.message.configure(text='Enter your Groq API key for natural conversation, or choose limited offline mode.')
+                return
+            self.verifying = True
+            self.pending_connection_settings = values
+            self.next_button.configure(state='disabled')
+            self.later_button.configure(state='disabled')
+            self.message.configure(text='Verifying the AI connection…')
+            def verify():
+                try:
+                    self.connection_results.put((True, self.controller.verify_ai_key(key)))
+                except (ValueError, OSError) as error:
+                    self.connection_results.put((False, str(error)))
+            threading.Thread(target=verify, daemon=True, name='setup-ai-check').start()
+            self.parent._schedule(100, self._connection_ready)
+        else:
+            self.step += 1
+            self._render()
+
+
 class SettingsDialog(ctk.CTkToplevel):
     """Scrollable configuration; no microphone enumeration on the Tk thread."""
 
     VOICES = ("en-US-EmmaMultilingualNeural", "en-IE-EmilyNeural", "en-GB-SoniaNeural", "en-GB-RyanNeural", "en-GB-ThomasNeural",
-              "en-US-JennyNeural", "en-US-GuyNeural", "en-IN-NeerjaNeural", "en-IN-PrabhatNeural")
+              "en-US-JennyNeural", "en-US-GuyNeural", "en-IN-NeerjaNeural", "en-IN-PrabhatNeural", "hi-IN-SwaraNeural", "hi-IN-MadhurNeural")
     GROQ_VOICES = ("autumn", "diana", "hannah", "austin", "daniel", "troy")
 
     def __init__(self, parent):
@@ -700,11 +912,21 @@ class SettingsDialog(ctk.CTkToplevel):
         parent._button(content, "Test saved voice", self._test_voice, width=150).grid(
             row=self._row, column=0, sticky="w", padx=14, pady=(0, 9))
         self._row += 1
-        self.stt = self._combo("Speech recognition service", settings.stt_provider, ("auto", "local", "groq", "google"), readonly=True)
-        self.language = self._entry("Recognition language", settings.recognition_language)
+        self.stt = self._combo("Speech recognition service", settings.stt_provider, ("auto", "local", "groq", "google", "deepgram"), readonly=True)
+        self.deepgram_key = self._entry('Deepgram API key (optional)', settings.deepgram_api_key, show='•')
+        self._hint('Deepgram streams activated requests for live transcription. It requires your own account and may incur usage charges. Model-improvement opt-out is enabled; provider pricing and retention terms apply. There is no automatic provider fallback.')
+        self.language = self._combo("Listening language", settings.recognition_language, ('en-IN', 'hi-IN', 'auto', 'en-US', 'en-GB'))
+        self._hint('Hindi: hi-IN. Hindi + English: auto with Groq or Deepgram. Auto service without a working Groq key falls back to Google Hindi. Hindi replies automatically use Swara (FRIDAY) or Madhur (ALFRED).')
         self._hint("Auto uses Groq Whisper with Google fallback. Online language examples: en-IN, en-GB, hi-IN.\nThe local wake detector listens for your assistant's name.")
         self._hint('Local streams English transcription without uploading the request. Auto shows a live local preview when the model is installed, then uses the selected online service for the final text.')
         self.microphone = self._combo("Microphone", self._mic_value, tuple(self._mic_values), readonly=True)
+        self.level_bar = ctk.CTkProgressBar(content, progress_color=parent.accent)
+        self.level_bar.set(0)
+        self.level_bar.grid(row=self._row, column=0, sticky='ew', padx=14, pady=5)
+        self._row += 1
+        parent._button(content, 'Test saved microphone levels (5 seconds)', self.controller.test_microphone, width=300).grid(
+            row=self._row, column=0, sticky='w', padx=14, pady=5)
+        self._row += 1
         mic_actions = ctk.CTkFrame(content, fg_color="transparent")
         mic_actions.grid(row=self._row, column=0, sticky="ew", padx=14, pady=(0, 10))
         self._row += 1
@@ -727,11 +949,14 @@ class SettingsDialog(ctk.CTkToplevel):
         self.pause_seconds = self._entry('Pause before ending a request (0.3–1.5 seconds)', settings.pause_seconds)
         self.echo_delay = self._entry('Speaker echo delay (0–300 ms)', settings.echo_delay_ms)
         self._section('SETUP & UPDATES')
+        parent._button(content, 'Restore settings from before update', self._restore_update, width=280).grid(
+            row=self._row, column=0, sticky='w', padx=14, pady=5)
+        self._row += 1
         for title, action in (('Install local wake model', 'wake'), ('Check for updates', 'check'), ('Download verified update', 'download')):
             parent._button(content, title, lambda value=action:self.controller.maintenance(value), width=255).grid(
                 row=self._row, column=0, sticky='w', padx=14, pady=5)
             self._row += 1
-        self._hint('The installer includes the wake model. Portable users can download it here. Updates come from this project’s GitHub Releases and are checked before you choose to install.')
+        self._hint('Wake detection stays on this PC; missing models never trigger online standby listening. Updates verify the pinned publisher signature and installer hash. A settings checkpoint is kept before installation; API keys and conversations stay in your personal data folder.')
         self._section('APP CONTEXT & ROUTINES')
         self._hint('Try “open Spotify”, then “minimize it”; “search Spotify for jazz”; or “list buttons in Spotify”.\nSave a routine: create routine work: open Notepad; volume 30\nRun it: start work. Manage it: list routines / delete routine work. Stop cancels remaining steps.')
         self._section("SAVED MEMORIES")
@@ -756,6 +981,17 @@ class SettingsDialog(ctk.CTkToplevel):
         self.parent._label(self._content, text, size=10, color=self.parent.accent, bold=True, anchor="w").grid(
             row=self._row, column=0, sticky="ew", padx=14, pady=(16, 9))
         self._row += 1
+
+    def set_level(self, level, clipping):
+        self.level_bar.set(level)
+        self.level_bar.configure(progress_color=ERROR if clipping else self.parent.accent)
+
+    def _restore_update(self):
+        try:
+            self.controller.restore_update_settings()
+            self.destroy()
+        except (OSError, ValueError) as error:
+            self.error_label.configure(text=str(error), text_color=ERROR)
 
     def _switch(self, label, value):
         variable = tk.BooleanVar(master=self, value=bool(value))
@@ -873,6 +1109,7 @@ class SettingsDialog(ctk.CTkToplevel):
                 raise ValueError("Follow-up seconds must be between 0 and 60.")
             values = {
                 "api_key": self.api_key.get().strip(), "model": self.model.get().strip(),
+                "deepgram_api_key": self.deepgram_key.get().strip(),
                 "voice_provider": self.voice_provider.get(),
                 "groq_voice": self.groq_voice.get(),
                 "voice": self.voice.get().strip(), "stt_provider": self.stt.get(),

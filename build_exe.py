@@ -23,6 +23,7 @@ def main():
                "--collect-all", "vosk", "--hidden-import", "win32security", "--hidden-import", "win32con",
                "--collect-all", "miniaudio", "--collect-all", "aec_audio_processing",
                "--collect-submodules", "pywinauto",
+               "--collect-all", "winrt", "--hidden-import", "winrt.windows.media.control",
                "--collect-submodules", "pycaw", "--hidden-import", "comtypes",
                "--hidden-import", "psutil", "--hidden-import", "screen_brightness_control",
                "--hidden-import", "screen_brightness_control.windows", "--hidden-import", "requests",
