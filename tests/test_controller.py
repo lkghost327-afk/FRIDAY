@@ -24,6 +24,8 @@ class FakeVoice:
         self.spoken.append(text)
     def stop(self, preserve_conversation=False):
         self.preserve.append(preserve_conversation)
+    def listen_once(self, **kwargs):
+        self.listen_options = kwargs
     def set_wake_enabled(self, enabled):
         self.wake = enabled
     def close(self):
@@ -72,6 +74,55 @@ class ControllerTests(unittest.TestCase):
     def test_start_keeps_mic_off_and_does_not_speak(self):
         self.assertFalse(self.controller.voice.wake)
         self.assertEqual(self.controller.voice.spoken, [])
+
+    def test_screen_request_uses_vision_and_does_not_save_answer(self):
+        from dataclasses import replace
+        self.controller.settings = replace(self.controller.settings, api_key='test')
+        self.controller.brain.answer_screen = Mock(return_value='PRIVATE SCREEN ANSWER')
+        with patch('assistant_core.automation_worker.isolated', return_value='data:image/jpeg;base64,test') as capture:
+            self.controller.submit('look at my screen and explain the error')
+            self.wait_done()
+        capture.assert_called_once()
+        self.controller.brain.answer_screen.assert_called_once()
+        self.assertNotIn('PRIVATE SCREEN ANSWER', str(self.controller.memory.snapshot()))
+
+    def test_screen_request_without_key_never_captures(self):
+        from dataclasses import replace
+        self.controller.settings = replace(self.controller.settings, api_key='')
+        with patch('assistant_core.automation_worker.isolated') as capture:
+            self.controller.submit('what is on my screen')
+            self.wait_done()
+        capture.assert_not_called()
+
+    def test_direct_dictation_captures_only_after_binding_target(self):
+        binding = {'field': {'mode': 'selection'}}
+        with patch.object(self.controller.router.desktop, 'prepare_dictation', return_value=binding):
+            self.controller.submit('dictate in Notepad')
+            self.wait_done()
+        self.assertTrue(self.controller.voice.listen_options['dictation'])
+        with patch.object(self.controller, '_insert_dictation') as insert:
+            self.controller.voice.listen_options['on_dictation']('shutdown computer')
+        self.assertEqual(insert.call_args.args[:2], (binding, 'shutdown computer'))
+        self.assertEqual(self.controller.voice.spoken, [])
+
+    def test_explicit_app_text_stays_out_of_model_and_history(self):
+        self.controller.brain.answer = Mock()
+        with patch.object(self.controller.router.desktop, 'controls', return_value='PRIVATE DOCUMENT BODY') as read:
+            self.controller.submit('read text in Notepad')
+            self.wait_done()
+        read.assert_called_once_with('Notepad', 'read')
+        self.controller.brain.answer.assert_not_called()
+        self.assertTrue(any(e.get('kind') == 'text_preview' and e.get('text') == 'PRIVATE DOCUMENT BODY' for e in self.events()))
+        self.assertNotIn('PRIVATE DOCUMENT BODY', str(self.controller.memory.snapshot()))
+
+    def test_cancelled_app_read_does_not_show_preview(self):
+        def read(*args):
+            self.controller._cancel.set()
+            return 'STALE CONTENT'
+        with patch.object(self.controller.router.desktop, 'controls', side_effect=read):
+            self.controller.submit('read text in Notepad')
+            self.wait_done()
+        self.assertFalse(any(e.get('kind') == 'text_preview' for e in self.events()))
 
     def test_startup_setting_registers_and_persists(self):
         self.controller.startup = Mock()

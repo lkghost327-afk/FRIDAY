@@ -8,7 +8,7 @@
 
 ## Portable version
 
-Download **FRIDAY.exe** if you prefer a single file. Keep it in a permanent folder. Python is included, and no speech model downloads automatically. If you explicitly want offline wake-word listening, select **Settings → Install local wake model**. This requires internet access and about 40 MB of download. The installer already includes the small English wake model.
+Download **FRIDAY.exe** if you prefer a single file. Keep it in a permanent folder. The beta.4 portable EXE and installer both include Python and the existing small English wake model. No additional model download is needed. Enable **Listen for "friday"** in the compact window. If the detector cannot load, use Talk and check Diagnostics; toggling wake off/on retries it.
 
 The model can be installed manually from https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip. Extract its named folder beneath `%LOCALAPPDATA%\FanAssistants\speech-models\`. There must be an `am\final.mdl` inside that model folder.
 

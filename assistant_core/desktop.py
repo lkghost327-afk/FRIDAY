@@ -144,9 +144,26 @@ class DesktopActions:
         process = _process_identity(target.process_name)
         if target.pid == os.getpid() or (process in NEVER_CLOSE_PROCESSES and process != 'explorer'):
             raise ValueError('That system or assistant window is protected.')
-        if operation not in {'list', 'search', 'button', 'navigate'} or len(text) > 2000:
+        if operation not in {'list', 'search', 'button', 'navigate', 'read', 'inspect'} or len(text) > 2000:
             raise ValueError('Choose list, search, button or navigation, with at most 2,000 characters.')
         # Capture the bound request callback; newer conversation jobs cannot revive this job.
         result = isolated(automate, (identity(target), app, operation, text), self.router.cancelled)
         self.remember(app)
         return result
+
+    def prepare_dictation(self, app):
+        from .automation_worker import identity, isolated
+        from .dictation import prepare
+        if app.casefold().strip() in {'current app', 'this app', 'active app'}:
+            import win32gui
+            handle = win32gui.GetForegroundWindow()
+            matches = [w for w in self.router._user_windows() if w.hwnd == handle]
+            if len(matches) != 1:
+                raise ValueError('Choose an application text field first.')
+            target = matches[0]
+        else:
+            target = self.one(self.resolve_reference(app))
+        from .actions import NEVER_CLOSE_PROCESSES, _process_identity
+        if target.pid == os.getpid() or _process_identity(target.process_name) in NEVER_CLOSE_PROCESSES:
+            raise ValueError('That application cannot receive dictation.')
+        return isolated(prepare, (identity(target),), self.router.cancelled)

@@ -147,12 +147,12 @@ class UpgradeTests(unittest.TestCase):
         decoder.PartialResult.side_effect = [json.dumps({'partial':'open'}), json.dumps({'partial':'open notepad'})]
         decoder.FinalResult.return_value = json.dumps({'text':'open notepad'})
         source = NS(stream=Mock())
-        with patch('speech_recognition.Microphone') as mic, patch('speech_recognition.Recognizer') as recognizer, patch.object(voice,'_command_decoder',return_value=decoder):
+        with patch('speech_recognition.Microphone') as mic, patch('speech_recognition.Recognizer') as recognizer, patch('assistant_core.voice.capture_phrase') as capture, patch.object(voice,'_command_decoder',return_value=decoder):
             mic.return_value.__enter__.return_value = source
-            recognizer.return_value.listen.return_value = iter([sr.AudioData(bytes(640),16000,2)]*2)
+            capture.return_value = iter([sr.AudioData(bytes(640),16000,2)]*2)
             self.assertEqual(voice._capture_and_transcribe(voice._capture_generation,True,False),'open notepad')
             recognizer.return_value.recognize_google.assert_not_called()
-            self.assertTrue(recognizer.return_value.listen.call_args.kwargs['stream'])
+            self.assertTrue(capture.call_args.kwargs['stream'])
         self.assertEqual([d['text'] for k,d in events if k=='transcript_partial'],['open','open notepad'])
         voice.close()
 
@@ -208,7 +208,7 @@ class UpgradeTests(unittest.TestCase):
     def test_routine_persistence_order_and_cancel(self):
         with tempfile.TemporaryDirectory() as folder:
             routines = Routines(Path(folder)/'routines.json')
-            router = NS(_stop=threading.Event(),cancelled=lambda:False,execute=Mock(return_value='Confirmed'))
+            router = NS(_stop=threading.Event(),cancelled=lambda:False,execute=Mock(side_effect=['Confirmed: Notepad is open.', 'Volume is 30%.']))
             routines.handle('create routine work: open Notepad; volume 30',router)
             routines = Routines(routines.path)
             self.assertIn('work',routines.handle('list routines',router))

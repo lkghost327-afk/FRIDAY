@@ -134,7 +134,8 @@ class ActionRouterTests(unittest.TestCase):
                 patch("assistant_core.actions.os.startfile") as startfile, \
                 patch("assistant_core.actions.webbrowser.open") as browser:
             for command in ("open notepad; calc", "open C:\\Windows\\System32\\cmd.exe", "open https://evil.invalid"):
-                self.assertIn("couldn't find", self.router.handle(command))
+                result = self.router.handle(command)
+                self.assertIn('Routine: Routines support' if ';' in command else "couldn't find", result)
         launch.assert_not_called()
         startfile.assert_not_called()
         browser.assert_not_called()

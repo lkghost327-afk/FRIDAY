@@ -27,6 +27,7 @@ def atomic_json(path: Path, data) -> None:
 class Settings:
     persona: str = "friday"
     model: str = "auto"
+    vision_model: str = "qwen/qwen3.8-27b"
     api_key: str = ""
     deepgram_api_key: str = ""
     voice: str = "en-US-EmmaMultilingualNeural"
@@ -36,6 +37,7 @@ class Settings:
     microphone_index: int | None = None
     recognition_language: str = "en-IN"
     stt_provider: str = "auto"
+    recognition_model: str = "whisper-large-v3"
     followup_seconds: int = 15
     wake_on_start: bool = False
     start_with_windows: bool = False
@@ -45,9 +47,11 @@ class Settings:
     microphone_name: str = ""
     microphone_threshold: int = 300
     wake_sensitivity: int = 50
-    pause_seconds: float = 0.55
+    pause_seconds: float = 0.95
     echo_delay_ms: int = 60
     setup_complete: bool = False
+    global_voice_shortcut: bool = False
+    shortcut_behavior: str = "hold"
 
     @property
     def display_name(self):
@@ -89,12 +93,14 @@ class Settings:
         if set(values) - editable:
             raise ValueError("Unknown setting: " + ", ".join(sorted(set(values) - editable)))
         result = replace(self, **values)
-        for field in ("model", "api_key", "deepgram_api_key", "voice", "voice_provider", "groq_voice",
-                      "recognition_language", "stt_provider", "microphone_name"):
+        for field in ("model", "vision_model", "api_key", "deepgram_api_key", "voice", "voice_provider", "groq_voice",
+                      "recognition_language", "recognition_model", "shortcut_behavior", "stt_provider", "microphone_name"):
             value = getattr(result, field)
             if not isinstance(value, str) or "\n" in value or "\r" in value:
                 raise ValueError(f"Invalid {field.replace('_', ' ')}.")
         result = replace(result, model=result.model.strip() or "auto", api_key=result.api_key.strip(), voice=result.voice.strip())
+        if not result.vision_model.strip() or len(result.vision_model) > 128:
+            raise ValueError('Choose a valid vision model.')
         if len(result.api_key) > 512 or len(result.deepgram_api_key) > 512 or len(result.model) > 128:
             raise ValueError("API key or model value is too long.")
         if not re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}-[A-Za-z]+Neural", result.voice):
@@ -105,6 +111,10 @@ class Settings:
             raise ValueError('The bundled local model supports English. Select Auto, Groq, Google or Deepgram for Hindi.')
         if result.stt_provider == 'google' and result.recognition_language == 'auto':
             raise ValueError('Google recognition needs a language: choose hi-IN for Hindi or en-IN for English.')
+        if result.shortcut_behavior not in {"hold", "toggle", "pause"}:
+            raise ValueError("Choose hold, toggle, or pause shortcut behavior.")
+        if result.recognition_model not in {"whisper-large-v3", "whisper-large-v3-turbo"}:
+            raise ValueError("Choose an available speech recognition model.")
         if result.stt_provider not in {"auto", "google", "groq", "local", "deepgram"}:
             raise ValueError("Choose Auto, Google, Groq, Local or Deepgram speech recognition.")
         if result.voice_provider not in {"edge", "groq"}:
@@ -112,7 +122,7 @@ class Settings:
         if result.groq_voice not in {"autumn", "diana", "hannah", "austin", "daniel", "troy"}:
             raise ValueError("Choose an available expressive Groq voice.")
         if any(type(getattr(result, name)) is not bool
-               for name in ("speech_enabled", "wake_on_start", "start_with_windows", "streaming_voice", "barge_in", "noise_suppression", "setup_complete")):
+               for name in ("speech_enabled", "wake_on_start", "start_with_windows", "streaming_voice", "barge_in", "noise_suppression", "setup_complete", "global_voice_shortcut")):
             raise ValueError("Speech, wake-at-start and Windows startup settings must be on or off.")
         if result.microphone_index is not None and (type(result.microphone_index) is not int or result.microphone_index < 0):
             raise ValueError("Choose a valid microphone.")

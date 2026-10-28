@@ -48,9 +48,14 @@ class Routines:
         return [parse_step(step) for step in steps]
 
     def handle(self, text, router):
+        alias = re.fullmatch(r'when I say ([\w -]{1,40})[, :]\s*(.+)', text, re.I)
+        if ',' not in text and ':' not in text:
+            alias = re.fullmatch(r'when I say ([\w -]{1,40}?)\s+((?:open|minimize|maximize|restore|focus|(?:set )?volume|(?:set )?brightness)\s+.+)', text, re.I) or alias
+        if alias:
+            text = f'create routine {alias[1].strip()}: {alias[2]}'
         match = re.fullmatch(r'(?:create|save) routine ([\w -]{1,40}):\s*(.+)', text, re.I)
         if match:
-            name, steps = match[1].strip().casefold(), [s.strip() for s in match[2].split(';')]
+            name, steps = match[1].strip().casefold(), self.split_steps(match[2])
             if not name:
                 raise ValueError('Give the routine a name.')
             self.validate(steps)
@@ -65,6 +70,14 @@ class Routines:
             return '\n'.join(f'{name}: ' + '; '.join(steps) for name, steps in data.items()) or 'No routines saved.'
         match = re.fullmatch(r'(run routine|start|delete routine) ([\w -]{1,40})', text, re.I)
         if not match:
+            # Only explicit sequence separators; "and" can be part of an app name.
+            if re.match(r'(?:open|minimize|maximize|restore|focus|(?:set )?volume|(?:set )?brightness)\b', text, re.I) and re.search(r';|\s+then\s+', text, re.I):
+                return self.run(self.split_steps(text), router)
+            if re.fullmatch(r'[\w -]{1,40}', text):
+                data = self.load()
+                name = text.casefold().strip()
+                if name in data:
+                    return self.run(data[name], router)
             return None
         data = self.load()
         name = match[2].casefold().strip()
@@ -74,7 +87,14 @@ class Routines:
             del data[name]
             atomic_json(self.path, data)
             return f'Deleted routine {name}.'
-        actions = self.validate(data[name])  # Validate every step before any side effect.
+        return self.run(data[name], router)
+
+    @staticmethod
+    def split_steps(text):
+        return [s.strip() for s in re.split(r';|\s+then\s+', text, flags=re.I)]
+
+    def run(self, steps, router):
+        actions = self.validate(steps)  # Validate every step before any side effect.
         results = []
         for tool, args in actions:
             if router._stop.is_set() or router.cancelled():
@@ -82,7 +102,22 @@ class Routines:
                 break
             result = router.execute(tool, args)
             results.append(result)
-            if any(word in result.casefold() for word in ("couldn't", 'not confirmed', 'not supported', 'ambiguous', 'could not')):
+            if not self.confirmed(tool, result, args):
                 results.append('Routine stopped because that step was not confirmed.')
                 break
         return '\n'.join(results)
+
+    @staticmethod
+    def confirmed(tool, result, args):
+        """Fail closed for unknown outcomes, including missing dependencies."""
+        if tool == 'open_app':
+            return any(line.startswith('Confirmed: ') and line.endswith(' is open.') for line in result.splitlines())
+        if tool == 'window_control':
+            return result.endswith(': confirmed.')
+        if tool == 'set_volume':
+            match = re.fullmatch(r'Volume is (\d+)%\..*', result)
+            return bool(match and int(match[1]) == args['percent'])
+        if tool == 'set_brightness':
+            match = re.fullmatch(r'Display brightness: (\d+%(?:, \d+%)*)\.', result)
+            return bool(match and all(int(value) == args['percent'] for value in re.findall(r'\d+', match[1])))
+        return False

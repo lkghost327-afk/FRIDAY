@@ -61,6 +61,10 @@ class AssistantWindow(ctk.CTk):
         self._phase = 0.0
         self._dialog = None
         self._message_count = 0
+        self._message_serial = 0
+        self._compact = True
+        self._last_request = ""
+        self._shortcut_finish = None
         self._started_at = time.monotonic()
         self._wake = tk.BooleanVar(
             master=self, value=bool(getattr(controller.settings, "wake_on_start", False))
@@ -70,11 +74,11 @@ class AssistantWindow(ctk.CTk):
         self._overlay = None
 
         self.title(f"{self.name} · Personal assistant")
-        width = min(1120, max(880, self.winfo_screenwidth() - 80))
-        height = min(780, max(640, self.winfo_screenheight() - 100))
+        width = min(740, self.winfo_screenwidth() - 40)
+        height = min(620, self.winfo_screenheight() - 80)
         x = max(0, (self.winfo_screenwidth() - width) // 2)
         self.geometry(f"{width}x{height}+{x}+20")
-        self.minsize(880, 640)
+        self.minsize(660, 510)
         self.configure(fg_color=BG)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -150,19 +154,36 @@ class AssistantWindow(ctk.CTk):
         header.grid_columnconfigure(1, weight=1)
         mark = ctk.CTkFrame(header, width=4, height=46, fg_color=self.accent, corner_radius=2)
         mark.grid(row=0, column=0, rowspan=2, padx=(0, 13), sticky="ns")
-        self._label(header, self.name, size=27, color=TEXT, bold=True, anchor="w").grid(
+        self._label(header, self.name, size=22, color=TEXT, bold=True, anchor="w").grid(
             row=0, column=1, sticky="w")
-        identity = "WAYNE MANOR / PERSONAL ASSISTANT" if self.persona == "alfred" else "PERSONAL INTELLIGENCE / DESKTOP ASSISTANT"
+        identity = "Your desktop, one request away"
         self._label(header, identity, size=10, anchor="w").grid(row=1, column=1, sticky="w")
-        self._button(header, "Hide to tray", self._hide_to_tray, width=96).grid(
+        self.layout_button = self._button(header, "Expand", self._toggle_layout, width=66)
+        self.layout_button.grid(row=0, column=5, rowspan=2, padx=(6, 0))
+        self._button(header, "Hide", self._hide_to_tray, width=55).grid(
             row=0, column=2, rowspan=2, padx=6
         )
-        self._button(header, "Diagnostics", self._diagnostics, width=98).grid(
+        self._button(header, "Check", self._diagnostics, width=58).grid(
             row=0, column=3, rowspan=2, padx=6
         )
         self._button(header, "Settings", self._open_settings, width=86).grid(
             row=0, column=4, rowspan=2, padx=(6, 0)
         )
+
+    def _toggle_layout(self):
+        self._compact = not self._compact
+        self.layout_button.configure(text="Expand" if self._compact else "Compact")
+        if self._compact:
+            self.sidebar.grid_remove()
+            self.geometry("740x620")
+        else:
+            self.sidebar.grid()
+            self.geometry("1120x780")
+
+    def _recall_request(self, _event=None):
+        if not self.composer.get("1.0", "end-1c").strip() and self._last_request:
+            self.composer.insert("1.0", self._last_request)
+            return "break"
 
     def _build_workspace(self):
         workspace = ctk.CTkFrame(self, fg_color="transparent")
@@ -172,10 +193,22 @@ class AssistantWindow(ctk.CTk):
         self._build_sidebar(workspace)
         self._build_conversation(workspace)
 
+    def _place_dialog(self, dialog, width, height):
+        # A default +200+200 placement can hide Save below a laptop taskbar.
+        screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
+        width = min(width, max(320, screen_width - 40))
+        height = min(height, max(320, screen_height - 100))
+        left = max(10, min(self.winfo_rootx() + (self.winfo_width() - width) // 2, screen_width - width - 20))
+        top = max(10, min(self.winfo_rooty() + 40, screen_height - height - 70))
+        dialog.geometry(f'{width}x{height}+{left}+{top}')
+
     def _build_sidebar(self, workspace):
         sidebar = ctk.CTkFrame(workspace, width=238, fg_color=PANEL, corner_radius=14,
                                border_color=LINE, border_width=1)
+        self.sidebar = sidebar
         sidebar.grid(row=0, column=0, sticky="ns", padx=(0, 14))
+        if self._compact:
+            sidebar.grid_remove()
         sidebar.grid_propagate(False)
         sidebar.grid_columnconfigure(0, weight=1)
         sidebar.grid_rowconfigure(4, weight=1)
@@ -221,10 +254,11 @@ class AssistantWindow(ctk.CTk):
         titlebar = ctk.CTkFrame(conversation, fg_color="transparent")
         titlebar.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 11))
         titlebar.grid_columnconfigure(0, weight=1)
-        self._label(titlebar, "Conversation", size=17, color=TEXT, bold=True).grid(row=0, column=0, sticky="w")
+        self._label(titlebar, "Ask anything", size=17, color=TEXT, bold=True).grid(row=0, column=0, sticky="w")
         self.session_label = self._label(titlebar, "THIS SESSION", size=10)
         self.session_label.grid(row=0, column=1, padx=10)
         self._button(titlebar, "Clear", self._clear_conversation, width=54).grid(row=0, column=2)
+        self._button(titlebar, "Dictate", self._dictate, width=68).grid(row=0, column=3, padx=(6, 0))
 
         transcript_frame = ctk.CTkFrame(conversation, fg_color=INSET, corner_radius=9)
         transcript_frame.grid(row=1, column=0, sticky="nsew", padx=15)
@@ -263,6 +297,7 @@ class AssistantWindow(ctk.CTk):
         self.composer = ctk.CTkTextbox(composer_frame, height=68, wrap="word", fg_color="transparent",
             text_color=TEXT, font=(FONT, 13), border_width=0, corner_radius=6, scrollbar_button_color=LINE)
         self.composer.grid(row=0, column=0, sticky="ew", padx=6, pady=5)
+        self.composer.bind("<Up>", self._recall_request)
         self.composer.bind("<Return>", self._composer_return)
         self.composer.bind("<Shift-Return>", self._composer_newline)
         self._button(composer_frame, "Send  ↗", self._send, primary=True, width=86).grid(row=0, column=1, padx=(6, 12))
@@ -270,10 +305,19 @@ class AssistantWindow(ctk.CTk):
         actions = ctk.CTkFrame(conversation, fg_color="transparent")
         actions.grid(row=4, column=0, sticky="ew", padx=15, pady=(10, 14))
         actions.grid_columnconfigure(2, weight=1)
+        self.live_caption = self._label(actions, "Ready when you are", size=11, anchor="w", wraplength=600)
+        self.live_caption.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(10, 4))
+        self.live_level = ctk.CTkProgressBar(actions, height=3, progress_color=self.accent)
+        self.live_level.grid(row=2, column=0, columnspan=3, sticky="ew")
+        self.live_level.set(0)
+        self.compact_wake_switch = ctk.CTkSwitch(actions, text=f'Listen for "{self.persona}"',
+            variable=self._wake, command=self._toggle_wake, progress_color=self.accent,
+            button_color=TEXT, font=(FONT, 11))
+        self.compact_wake_switch.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.talk_button = self._button(actions, f"Talk to {self.name}", self._listen, width=145)
         self.talk_button.grid(row=0, column=0, sticky="w")
         self._button(actions, "Stop · Esc", self._stop, width=85).grid(row=0, column=1, padx=(7, 0))
-        self._label(actions, "Enter to send  ·  Shift + Enter for a new line", size=10, anchor="e").grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self._label(actions, "Enter to send · ↑ recall", size=10, anchor="e").grid(row=0, column=2, sticky="e", padx=(8, 0))
 
     def _build_footer(self):
         footer = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
@@ -297,13 +341,29 @@ class AssistantWindow(ctk.CTk):
         self.transcript.configure(state="normal")
         self.transcript.insert("end", f"{label}  ·  {time.strftime('%H:%M')}\n", f"heading_{role}")
         body_style = "system_body" if role == "system" else "error_body" if role == "error" else "body"
-        self.transcript.insert("end", str(text).strip() + "\n\n", body_style)
+        self._message_serial += 1
+        tag = f'message_{self._message_serial}'
+        self.transcript.insert("end", str(text).strip() + "\n\n", (body_style, tag))
+        if role in {'assistant', 'user'}:
+            self.transcript.tag_bind(tag, '<Double-Button-1>',
+                lambda _event, value=str(text), edit=role == 'user': self._reuse_message(value, edit))
         self.transcript.configure(state="disabled")
         if bottom or role == "user":
             self.transcript.see("end")
         if role in {"assistant", "user"}:
             self._message_count += 1
             self.session_label.configure(text=f"{self._message_count} MESSAGES")
+
+    def _reuse_message(self, text, edit=False):
+        if edit:
+            self.composer.delete('1.0', 'end')
+            self.composer.insert('1.0', text)
+            self.composer.focus_set()
+        else:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.live_caption.configure(text='Answer copied')
+        return 'break'
 
     def _poll_events(self):
         # Bound each batch so a chatty worker cannot monopolize the Tk event loop.
@@ -317,16 +377,45 @@ class AssistantWindow(ctk.CTk):
             kind = event.get("kind")
             if kind == "message":
                 self._append_message(event.get("role", "system"), event.get("text", ""))
+            elif kind == 'text_preview':
+                self._preview_text(event.get('title', 'Text preview'), event.get('text', ''))
+            elif kind == 'shortcut_released':
+                if self.controller.settings.shortcut_behavior == 'hold' and self._shortcut_finish is not None:
+                    self._shortcut_finish.set()
+            elif kind in {'voice_shortcut', 'dictation_shortcut'}:
+                mode = self.controller.settings.shortcut_behavior
+                if self._state == 'listening' and self._shortcut_finish is not None:
+                    self._shortcut_finish.set()
+                elif self._state in {'listening', 'transcribing', 'thinking', 'speaking'}:
+                    self._shortcut_finish = None
+                    self.controller.stop()
+                else:
+                    self._shortcut_finish = threading.Event() if mode != 'pause' else None
+                    self._wake_overlay_session = True
+                    hint = 'Release the shortcut to send' if mode == 'hold' else 'Press the shortcut again to send' if mode == 'toggle' else 'Speak, then pause to send'
+                    self._overlay.show('listening', hint + ' · Esc cancels')
+                    self._set_status('listening', hint)
+                    if kind == 'dictation_shortcut':
+                        self.controller.dictate_current(finish_signal=self._shortcut_finish)
+                    else:
+                        self.controller.listen_once(finish_signal=self._shortcut_finish)
             elif kind == "status":
                 self._set_status(event.get("state", "standby"), event.get("detail", ""))
+            elif kind == 'transcript_final':
+                self.live_caption.configure(text='Heard: ' + event.get('text', '')[-160:])
             elif kind == 'transcript_partial':
-                self.detail_label.configure(text='Hearing: ' + event.get('text', '')[-160:])
+                text = event.get('text', '')[-160:]
+                self.detail_label.configure(text='Hearing: ' + text)
+                self.live_caption.configure(text='Hearing: ' + text)
+                self._overlay.set_phase('listening', text)
             elif kind == 'calibration':
                 try:
                     self.controller.save_calibration(event['threshold'])
                 except (OSError, ValueError):
                     self._append_message('system', 'Microphone tested, but its calibration could not be saved.')
             elif kind == 'mic_level':
+                self.live_level.set(max(0, min(1, event.get('level', 0))))
+                self.live_level.configure(progress_color=ERROR if event.get('clipping') else self.accent)
                 dialog = getattr(self, '_dialog', None)
                 if dialog is not None and dialog.winfo_exists() and hasattr(dialog, 'set_level'):
                     dialog.set_level(event.get('level', 0), event.get('clipping', False))
@@ -351,6 +440,32 @@ class AssistantWindow(ctk.CTk):
                 self._overlay.show("listening", event.get("detail", "Listening"))
         self._schedule(120 if self._hidden_to_tray else 60, self._poll_events)
 
+    def _preview_text(self, title, text):
+        self._show_window()
+        previous = getattr(self, '_text_preview', None)
+        if previous is not None and previous.winfo_exists():
+            previous.destroy()
+        window = ctk.CTkToplevel(self)
+        self._text_preview = window
+        window.title(title)
+        self._place_dialog(window, 650, 420)
+        self._label(window, 'Review locally. Copy only when you are ready.', size=13).pack(pady=12)
+        editor = ctk.CTkTextbox(window, wrap='word')
+        editor.pack(fill='both', expand=True, padx=16, pady=8)
+        editor.insert('1.0', text)
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(editor.get('1.0', 'end-1c'))
+            window.destroy()
+        self._button(window, 'Copy text', copy, width=110).pack(side='left', padx=16, pady=12)
+        self._button(window, 'Discard', window.destroy, width=100).pack(side='right', padx=16, pady=12)
+
+    def _dictate(self):
+        dialog = ctk.CTkInputDialog(text='Which app should receive the text? Example: Notepad.\nClick its text field first if it has several.', title='Dictate into an app')
+        app = dialog.get_input()
+        if app and app.strip():
+            self.controller.submit('dictate in ' + app.strip())
+
     def _poll_tray(self):
         """Run native tray requests on Tk's owning thread."""
         for _ in range(20):
@@ -374,6 +489,8 @@ class AssistantWindow(ctk.CTk):
     def _set_status(self, state, detail):
         previous = self._state
         self._state = str(state).lower()
+        if self._state != 'listening':
+            self._shortcut_finish = None
         color = ERROR if self._state == "error" else self.accent
         self.state_label.configure(text=str(state).upper(), text_color=color)
         self.detail_label.configure(text=detail or {
@@ -382,6 +499,9 @@ class AssistantWindow(ctk.CTk):
             "thinking": "Working on your request…", "speaking": "Speaking. Press Esc to interrupt.",
             "error": "See the conversation for details.",
         }.get(self._state, ""))
+        self.live_caption.configure(text=self.detail_label.cget("text"))
+        if self._state not in {"listening", "transcribing"}:
+            self.live_level.set(0)
         busy = self._state in {"listening", "transcribing", "thinking", "speaking"}
         self.talk_button.configure(state="disabled" if busy else "normal")
         # Newer voice services emit wake_detected.  The transition fallback also
@@ -406,6 +526,7 @@ class AssistantWindow(ctk.CTk):
     def _send(self):
         text = self.composer.get("1.0", "end-1c").strip()
         if text:
+            self._last_request = text
             try:
                 self.controller.submit(text)
             except Exception as exc:
@@ -420,12 +541,14 @@ class AssistantWindow(ctk.CTk):
         self._send()
 
     def _listen(self):
+        self._shortcut_finish = None
         try:
             self.controller.listen_once()
         except Exception as exc:
             self._append_message("error", str(exc))
 
     def _stop(self, _event=None):
+        self._shortcut_finish = None
         self.controller.stop()
         return "break"
 
@@ -470,10 +593,10 @@ class AssistantWindow(ctk.CTk):
         model = getattr(settings, "model", "")
         conversation = f"Groq configured · {model}" if configured else "Local commands available · Add an AI key in Settings"
         stt = {"auto": "Auto (Groq / Google)", "groq": "Groq", "google": "Google", "local": "Local", "deepgram": "Deepgram live"}.get(getattr(settings, "stt_provider", "auto"), "Auto")
-        self.connection_label.configure(text=f"{conversation}    /    Speech recognition: {stt}")
+        self.connection_label.configure(text=f"{'AI key configured' if configured else 'Add an AI key in Settings'} · {stt}")
 
     def _update_telemetry(self):
-        if self._hidden_to_tray:
+        if self._hidden_to_tray or self._compact:
             self._schedule(5000, self._update_telemetry)
             return
         if psutil is not None:
@@ -494,7 +617,7 @@ class AssistantWindow(ctk.CTk):
         self._schedule(1200, self._update_telemetry)
 
     def _animate(self):
-        if self._hidden_to_tray:
+        if self._hidden_to_tray or self._compact:
             # The small wake overlay has its own animation. Do no drawing for
             # the invisible main window while the assistant is in the tray.
             self._schedule(300, self._animate)
@@ -654,7 +777,7 @@ class SetupDialog(ctk.CTkToplevel):
         self.connection_results = queue.Queue()
         self.verifying = False
         self.title(f'{parent.name} · First-time setup')
-        self.geometry('650x580')
+        parent._place_dialog(self, 650, 580)
         self.minsize(560, 500)
         self.configure(fg_color=BG)
         self.transient(parent)
@@ -856,7 +979,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.title(f"{parent.name} · Settings")
         self.configure(fg_color=BG)
         screen_height = self.winfo_screenheight()
-        self.geometry(f"650x{min(735, screen_height - 85)}")
+        parent._place_dialog(self, 650, 735)
         self.minsize(540, 480)
         self.transient(parent)
         self.grid_columnconfigure(0, weight=1)
@@ -890,8 +1013,14 @@ class SettingsDialog(ctk.CTkToplevel):
                    "If disabled in Windows Startup Apps, enable it there too.")
         self._section("CONVERSATION")
         self.api_key = self._entry("Groq API key", getattr(settings, "api_key", ""), show="•")
+        self._key_results = queue.Queue()
+        self.verify_key_button = parent._button(content, 'Test this API key', self._verify_key, width=170)
+        self.verify_key_button.grid(row=self._row, column=0, sticky='w', padx=14, pady=5)
+        self._row += 1
         self._hint("Used for natural conversation and, if selected, Groq speech recognition.\nThe key is hidden here; it is never included in diagnostic output.")
         self.model = self._combo("Conversation model", settings.model, ("auto", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"))
+        self.vision_model = self._entry('Screen understanding model', settings.vision_model)
+        self._hint('“Look at my screen” sends one primary-screen image to Groq using your own key. Images and screen answers are not saved in history. There is no background screen sharing.')
         self._hint("Use auto to select an available model, or enter a model your Groq account supports.")
         self._section("VOICE & MICROPHONE")
         self.voice_provider = self._combo(
@@ -941,11 +1070,16 @@ class SettingsDialog(ctk.CTkToplevel):
         self._row += 1
         self._hint('Save your microphone selection first. Then stay quiet for two seconds during calibration. Disconnected microphones fall back to Windows default and reconnect by device name.')
         self._section('RESPONSE SPEED & INTERRUPTION')
+        self.global_voice_shortcut = self._switch('Global voice shortcut (Ctrl+Alt+A for ALFRED; Ctrl+Alt+F for FRIDAY)', settings.global_voice_shortcut)
+        self.shortcut_behavior = self._combo('Shortcut behavior', settings.shortcut_behavior, ('hold', 'toggle', 'pause'), readonly=True)
+        self._hint('Hold: release to send. Toggle: press again to send. Pause: finish after silence. Esc cancels. Add Shift to dictate into the focused field. At the recording limit, words appear for review without running commands.')
         self.streaming_voice = self._switch('Stream audio as it arrives', settings.streaming_voice)
         self.barge_in = self._switch('Allow spoken interruptions', settings.barge_in)
         self.noise_suppression = self._switch('Reduce background noise', settings.noise_suppression)
         self._hint('Spoken interruption needs the local model. Echo cancellation is available during streaming Edge playback; buffered/Windows fallback voices pause capture to avoid feedback.')
         self.wake_sensitivity = self._entry('Wake sensitivity (1–100; higher is more sensitive)', settings.wake_sensitivity)
+        self.recognition_model = self._combo('Recognition accuracy', settings.recognition_model, ('whisper-large-v3', 'whisper-large-v3-turbo'), readonly=True)
+        self._hint('Large v3 favors accuracy; turbo favors speed. Both use your cloud account. No model download.')
         self.pause_seconds = self._entry('Pause before ending a request (0.3–1.5 seconds)', settings.pause_seconds)
         self.echo_delay = self._entry('Speaker echo delay (0–300 ms)', settings.echo_delay_ms)
         self._section('SETUP & UPDATES')
@@ -958,7 +1092,7 @@ class SettingsDialog(ctk.CTkToplevel):
             self._row += 1
         self._hint('Wake detection stays on this PC; missing models never trigger online standby listening. Updates verify the pinned publisher signature and installer hash. A settings checkpoint is kept before installation; API keys and conversations stay in your personal data folder.')
         self._section('APP CONTEXT & ROUTINES')
-        self._hint('Try “open Spotify”, then “minimize it”; “search Spotify for jazz”; or “list buttons in Spotify”.\nSave a routine: create routine work: open Notepad; volume 30\nRun it: start work. Manage it: list routines / delete routine work. Stop cancels remaining steps.')
+        self._hint('Try “open Notepad then volume 30” or “when I say work, open Notepad then volume 30”.\nRun saved routines: work. Manage: list routines / delete routine work.\n“Read text in Chrome” opens a local text preview. “Look at my screen” requests a cloud image answer. “Dictate in Notepad” inserts literal speech into a chosen writable field without submitting it.')
         self._section("SAVED MEMORIES")
         self._hint("Clear facts you have asked the assistant to remember. This cannot be undone.")
         parent._button(content, "Clear saved memories", self._clear_memories, width=180).grid(
@@ -976,6 +1110,29 @@ class SettingsDialog(ctk.CTkToplevel):
         self._load_microphones()
         parent._schedule(100, self._poll_microphones)
         parent._schedule(150, lambda: self.lift() if self.winfo_exists() else None)
+
+    def _verify_key(self):
+        key = self.api_key.get().strip()
+        self.verify_key_button.configure(state='disabled')
+        self.error_label.configure(text='Checking the key with Groq…', text_color=MUTED)
+        def work():
+            try:
+                self._key_results.put((True, self.controller.verify_ai_key(key)))
+            except Exception:
+                self._key_results.put((False, 'The key could not be verified. Check the key, account and connection.'))
+        threading.Thread(target=work, name='settings-key-check', daemon=True).start()
+        self.parent._schedule(100, self._key_result)
+
+    def _key_result(self):
+        if not self.winfo_exists():
+            return
+        try:
+            ok, message = self._key_results.get_nowait()
+        except queue.Empty:
+            self.parent._schedule(100, self._key_result)
+            return
+        self.verify_key_button.configure(state='normal')
+        self.error_label.configure(text=message + (' Save to apply.' if ok else ''), text_color=self.parent.accent if ok else ERROR)
 
     def _section(self, text):
         self.parent._label(self._content, text, size=10, color=self.parent.accent, bold=True, anchor="w").grid(
@@ -1109,6 +1266,7 @@ class SettingsDialog(ctk.CTkToplevel):
                 raise ValueError("Follow-up seconds must be between 0 and 60.")
             values = {
                 "api_key": self.api_key.get().strip(), "model": self.model.get().strip(),
+                "vision_model": self.vision_model.get().strip(),
                 "deepgram_api_key": self.deepgram_key.get().strip(),
                 "voice_provider": self.voice_provider.get(),
                 "groq_voice": self.groq_voice.get(),
@@ -1119,10 +1277,13 @@ class SettingsDialog(ctk.CTkToplevel):
                 "start_with_windows": self.start_with_windows.get(),
                 "setup_complete": True,
                 "streaming_voice": self.streaming_voice.get(),
+                "global_voice_shortcut": self.global_voice_shortcut.get(),
                 "barge_in": self.barge_in.get(),
                 "noise_suppression": self.noise_suppression.get(),
                 "wake_sensitivity": int(self.wake_sensitivity.get()),
                 "pause_seconds": float(self.pause_seconds.get()),
+                "recognition_model": self.recognition_model.get(),
+                "shortcut_behavior": self.shortcut_behavior.get(),
                 "echo_delay_ms": int(self.echo_delay.get()),
                 "microphone_name": self.microphone.get().split(' · ', 1)[1] if ' · ' in self.microphone.get() else self.controller.settings.microphone_name if self._mic_values.get(self.microphone.get()) is not None else '',
             }

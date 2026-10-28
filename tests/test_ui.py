@@ -25,8 +25,14 @@ class FakeController:
     def submit(self, text):
         self.submitted.append(text)
 
-    def listen_once(self):
+    def listen_once(self, finish_signal=None):
+        self.finish_signal = finish_signal
+
+    def dictate_once(self):
         pass
+
+    def dictate_current(self, finish_signal=None):
+        self.finish_signal = finish_signal
 
     def test_microphone(self):
         self.events.put({'kind':'mic_level', 'level':.5, 'clipping':False})
@@ -71,6 +77,80 @@ class FakeController:
 
 
 class WindowSmokeTests(unittest.TestCase):
+    def test_compact_caption_meter_and_request_recall(self):
+        with mock.patch('assistant_core.ui.SystemTray.start', return_value=False):
+            controller = FakeController('friday')
+            window = AssistantWindow(controller)
+        try:
+            window.update_idletasks()
+            self.assertTrue(window._compact)
+            self.assertFalse(window.sidebar.winfo_ismapped())
+            self.assertTrue(window.compact_wake_switch.winfo_manager())
+            window.compact_wake_switch.select()
+            window._toggle_wake()
+            self.assertTrue(controller.wake)
+            self.assertTrue(window.wake_switch.get())
+            controller.events.put({'kind':'wake', 'enabled':False})
+            controller.events.put({'kind':'transcript_partial', 'text':'open Spotify'})
+            controller.events.put({'kind':'mic_level', 'level':.4, 'clipping':False})
+            window._poll_events()
+            self.assertFalse(window.compact_wake_switch.get())
+            self.assertIn('open Spotify', window.live_caption.cget('text'))
+            self.assertAlmostEqual(window.live_level.get(), .4)
+            dialog = mock.Mock()
+            with mock.patch.object(window, 'winfo_screenheight', return_value=768), mock.patch.object(window, 'winfo_rooty', return_value=500):
+                window._place_dialog(dialog, 650, 735)
+            geometry = dialog.geometry.call_args.args[0]
+            size, left, top = geometry.split('+')
+            self.assertLessEqual(int(top) + int(size.split('x')[1]), 698)
+            self.assertEqual(controller.submitted, [])
+            window.composer.insert('1.0', 'Open Notepad')
+            window._send()
+            window._recall_request()
+            self.assertEqual(window.composer.get('1.0', 'end-1c'), 'Open Notepad')
+            window._toggle_layout()
+            # CustomTkinter maps the Windows title bar using a delayed callback.
+            # Pump the event loop before checking native visibility.
+            deadline = time.monotonic() + 1
+            while not window.sidebar.winfo_ismapped() and time.monotonic() < deadline:
+                window.update()
+                time.sleep(.01)
+            self.assertTrue(window.sidebar.winfo_ismapped())
+        finally:
+            window._close()
+
+    def test_hold_and_toggle_finish_only_on_the_expected_event(self):
+        for mode, finish_event in [('hold', 'shortcut_released'), ('toggle', 'voice_shortcut')]:
+            with mock.patch('assistant_core.ui.SystemTray.start', return_value=False):
+                controller = FakeController('friday')
+                controller.settings = controller.settings.updated({'shortcut_behavior':mode})
+                window = AssistantWindow(controller)
+            try:
+                controller.events.put({'kind':'voice_shortcut'})
+                window._poll_events()
+                self.assertFalse(controller.finish_signal.is_set())
+                controller.events.put({'kind':finish_event})
+                window._poll_events()
+                self.assertTrue(controller.finish_signal.is_set())
+                self.assertFalse(controller.stopped)
+            finally:
+                window._close()
+
+    def test_local_preview_does_not_submit_text_and_shortcut_can_stop_transcription(self):
+        with mock.patch('assistant_core.ui.SystemTray.start', return_value=False):
+            controller = FakeController('friday')
+            window = AssistantWindow(controller)
+        try:
+            window._preview_text('Dictation', 'shutdown computer')
+            window.update_idletasks()
+            self.assertEqual(controller.submitted, [])
+            window._state = 'transcribing'
+            controller.events.put({'kind': 'voice_shortcut'})
+            window._poll_events()
+            self.assertTrue(controller.stopped)
+        finally:
+            window._close()
+
     def test_guided_setup_and_meter_for_both_personas(self):
         for persona in ('friday', 'alfred'):
             with self.subTest(persona=persona):
@@ -175,6 +255,7 @@ class WindowSmokeTests(unittest.TestCase):
                     self.assertFalse(dialog.winfo_exists())
                     window._clear_conversation()
                     self.assertNotIn("Hello from the worker.", window.transcript.get("1.0", "end"))
+                    window._toggle_layout()
                     window._animate()
                     self.assertGreater(len(window.core_canvas.find_all()), 50)
                 finally:

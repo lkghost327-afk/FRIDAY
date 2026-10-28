@@ -2,9 +2,13 @@
 
 An independent Iron Man fan assistant for Windows: natural conversation, streamed speech, local wake detection and useful PC controls.
 
-**[Download FRIDAY v5.1 beta installer](https://github.com/lkghost327-afk/FRIDAY/releases/download/v5.1.0-beta.1/FRIDAY-Setup.exe)** · [Portable EXE](https://github.com/lkghost327-afk/FRIDAY/releases/download/v5.1.0-beta.1/FRIDAY.exe) · [First-run guide](docs/FIRST_RUN.md) · [All releases](https://github.com/lkghost327-afk/FRIDAY/releases) · [ALFRED](https://github.com/lkghost327-afk/ALFRED)
+**[Download FRIDAY v5.1 beta installer](https://github.com/lkghost327-afk/FRIDAY/releases/download/v5.1.0-beta.4/FRIDAY-Setup.exe)** · [Portable EXE](https://github.com/lkghost327-afk/FRIDAY/releases/download/v5.1.0-beta.4/FRIDAY.exe) · [First-run guide](docs/FIRST_RUN.md) · [All releases](https://github.com/lkghost327-afk/FRIDAY/releases) · [ALFRED](https://github.com/lkghost327-afk/ALFRED)
 
-The new features below are in **v5.1.0-beta.1**. [Stable v5.0.0](https://github.com/lkghost327-afk/FRIDAY/releases/tag/v5.0.0) remains available.
+The current prerelease is **v5.1.0-beta.4**. [Stable v5.0.0](https://github.com/lkghost327-afk/FRIDAY/releases/tag/v5.0.0) remains available.
+
+## Current Windows prerelease
+
+The source now includes **5.1.0-beta.4**: compact UI and live captions, steadier phrase capture, hold/toggle shortcuts, direct dictation, explicit screen questions and a Settings API-key test. Wake detection now tolerates short timing differences between its two local decoders and accepts split-name pronunciations. A wake switch is visible in compact mode. Human microphone accuracy still needs a live check; cloud voice requires a working personal API key. See [Windows interaction](docs/WINDOWS-INTERACTION.md) and the [feature coverage and remaining gaps](docs/DESKTOP-COVERAGE.md).
 
 ## Start on Windows
 
@@ -13,9 +17,13 @@ The new features below are in **v5.1.0-beta.1**. [Stable v5.0.0](https://github.
 3. Enter your own [Groq API key](https://console.groq.com/keys). Setup verifies it before enabling AI conversation. You may instead choose limited offline mode for local PC commands. Choose **local** recognition for English voice commands without uploading the recording.
 4. Press **Talk**, or enable **Wake word** and say “Friday, open Spotify”. Only enable wake listening in one assistant at a time.
 
-The optional portable EXE needs no Python installation and downloads no model automatically. Use **Settings → Install local wake model** only if you explicitly want offline wake listening. Keep it in a permanent folder if enabling startup. EXEs are not Windows Authenticode-signed; release manifests are publisher-signed; SHA256SUMS.txt is provided for checking downloads. Download a release asset, not GitHub’s source-code ZIP.
+The optional portable EXE needs no Python installation and includes the existing English wake model. It downloads no model automatically. Enable **Listen for "friday"** in the compact window to use it. Keep it in a permanent folder if enabling startup. EXEs are not Windows Authenticode-signed; release manifests are publisher-signed; SHA256SUMS.txt is provided for checking downloads. Download a release asset, not GitHub’s source-code ZIP.
 
-## v5.1 beta
+## Validation
+
+See the [beta.4 test report](docs/VALIDATION-beta4.md) for the 215-test suite, packaged startup checks and remaining live-voice limitations. The installer was compiled from the tested portable EXE; clean-VM installation testing is still pending.
+
+## Earlier v5.1 beta features
 
 [Download v5.1.0-beta.1](https://github.com/lkghost327-afk/FRIDAY/releases/tag/v5.1.0-beta.1) for Hindi/Hinglish recognition and commands, optional live transcription, Spotify and app navigation, guided setup and signed updates. See the [beta guide](docs/V5.1.md) and [validation status](docs/VALIDATION-v5.1.md). Stable v5 remains available.
 

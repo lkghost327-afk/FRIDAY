@@ -128,7 +128,7 @@ class SystemTray:
 class WakeOverlay(tk.Toplevel):
     """A tiny animated indicator that stays out of the user's focus path."""
 
-    WIDTH = 100
+    WIDTH = 360
     HEIGHT = 92
 
     def __init__(self, parent, accent: str, name: str):
@@ -211,7 +211,7 @@ class WakeOverlay(tk.Toplevel):
         if self._closed:
             return
         self._phase = str(phase or "listening").lower()
-        self._detail = str(detail or self._phase).upper()
+        self._detail = str(detail or self._phase)
         self._active = True
         self._fade_started = None
         self._last_activity = time.monotonic()
@@ -232,7 +232,7 @@ class WakeOverlay(tk.Toplevel):
         if self._active:
             self._last_activity = time.monotonic()
             self._phase = str(phase or "thinking").lower()
-            self._detail = str(detail or self._phase).upper()
+            self._detail = str(detail or self._phase)
 
     def fade(self) -> None:
         if self._active and self._fade_started is None:
@@ -254,7 +254,8 @@ class WakeOverlay(tk.Toplevel):
         pulse = (math.sin(self._angle * 2.4) + 1.0) / 2.0
         canvas = self.canvas
         canvas.delete("all")
-        cx, cy = 50, 37
+        canvas.create_rectangle(2, 2, self.WIDTH-2, self.HEIGHT-2, fill="#0E1721", outline="#223140")
+        cx, cy = 44, 43
         dim = _mix(self.accent, "#081019", 0.40)
         for index, radius in enumerate((18 + pulse * 3, 25 + pulse * 4, 32 + pulse * 3)):
             canvas.create_oval(
@@ -282,8 +283,11 @@ class WakeOverlay(tk.Toplevel):
             "listening": "LISTENING", "transcribing": "HEARD YOU",
             "thinking": "THINKING", "speaking": "SPEAKING",
         }.get(self._phase, self._detail[:24])
-        canvas.create_text(cx, 81, text=phase_text,
+        canvas.create_text(88, 20, anchor="w", text=phase_text,
                            fill=self.accent, font=("Segoe UI", 8, "bold"))
+
+        canvas.create_text(88, 49, anchor="w", width=252, text=self._detail[-120:],
+                           fill="#E8F1F7", font=("Segoe UI", 10))
 
         if time.monotonic() - self._last_activity > 120:
             self.fade()

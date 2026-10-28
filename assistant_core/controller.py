@@ -22,6 +22,9 @@ HELP = ("I can talk through questions, explain things, help you code, and keep t
         "Use Talk for one request, or enable Wake word to call my name and continue the conversation. "
         "Try 'minimize it', 'search Spotify for jazz', or 'list buttons in Notepad'. "
         "Save a routine with 'create routine work: open Notepad; volume 30', then say 'run routine work'. "
+        "You can also say 'open Notepad then volume 30'. Try 'read text in Chrome' for a local text preview. "
+        "Say 'dictate in Notepad' to insert literal speech into a chosen field, or 'look at my screen' for a cloud screen answer. "
+        "Settings can enable global Talk and dictation shortcuts. "
         "Press Escape or say Stop to interrupt. Local recognition is available in Settings; AI chat uses the internet.")
 
 
@@ -61,6 +64,8 @@ class AssistantController:
         self.voice = VoiceService(self.settings, self.emit)
         from .device_watch import DeviceWatch
         self._device_watch = DeviceWatch(self._device_event)
+        from .hotkey import VoiceHotkey
+        self._hotkey = VoiceHotkey(persona, self.emit)
         self.router = ActionRouter(self.base_dir, persona, self.emit)
         self.router.cancelled = lambda: self._cancel.is_set()
         if startup_error is not None:
@@ -69,6 +74,14 @@ class AssistantController:
     def emit(self, kind, **payload):
         if self._closed.is_set():
             return
+        if kind == 'voice_cancel':
+            self.stop()
+            return
+        if kind == 'status' and hasattr(self, '_hotkey'):
+            if payload.get('state') in {'listening', 'transcribing', 'thinking', 'speaking'}:
+                self._hotkey.cancel_enabled.set()
+            else:
+                self._hotkey.cancel_enabled.clear()
         if kind == "reminder":
             text = payload.get("text", "Reminder due.")
             self.events.put({"kind": "message", "role": "assistant", "text": text})
@@ -86,6 +99,8 @@ class AssistantController:
             return
         self._started = True
         self._device_watch.start()
+        if self.settings.global_voice_shortcut:
+            self._hotkey.start()
         from .maintenance import recovery_status
         from . import __version__
         recovery = recovery_status(self.base_dir, __version__)
@@ -164,6 +179,15 @@ class AssistantController:
 
     def _local_reply(self, text):
         normalized = text.casefold().strip(" .!?")
+        match = re.fullmatch(r'(?:read|show) (?:the )?(?:visible |screen )?text (?:in|from) (.+)', text.strip().rstrip('.!?'), re.I)
+        if match:
+            try:
+                content = self.router.desktop.controls(match[1], 'read')
+            except (ValueError, OSError, ImportError) as error:
+                return f'App text could not be read: {error}'
+            if not self.router.cancelled():
+                self.emit('text_preview', title=f'Accessible text — {match[1]}', text=content)
+            return 'App text is ready in a local preview. It was not sent to the conversation model. Some apps do not expose their text.'
         if normalized in {"help", "what can you do", "show commands", "commands", "what do you do"}:
             return HELP
         if normalized in {"who are you", "introduce yourself"}:
@@ -190,6 +214,8 @@ class AssistantController:
             except queue.Empty:
                 continue
             failed = False
+            capture_started = False
+            private_context = False
             speech = ReplySpeech(lambda text: self.voice.speak(text, prefetch=True))
             streamed = False
             def on_model_event(kind, **data):
@@ -210,7 +236,24 @@ class AssistantController:
                 if cancel.is_set():
                     continue
                 self.router.cancelled = cancel.is_set
-                answer = self._local_reply(text)
+                from .screen_context import is_screen_question, capture_screen
+                dictation = re.fullmatch(r'dictate (?:in|into|to) (.+)', text.strip().rstrip('.!?'), re.I)
+                if dictation:
+                    capture_started = self._begin_target_dictation(dictation[1], cancel)
+                    continue
+                if is_screen_question(text):
+                    if not self.settings.api_key:
+                        raise BrainError('Add your Groq key in Settings before asking about the screen.')
+                    from .automation_worker import isolated
+                    self.emit('notice', message='Your explicit screen request sends one primary-screen image to Groq using your account. The image is not saved.')
+                    picture = isolated(capture_screen, (), cancel.is_set)
+                    private_context = True
+                    try:
+                        answer = self.brain.answer_screen(text, picture, cancel, on_model_event)
+                    finally:
+                        picture = None
+                else:
+                    answer = self._local_reply(text)
                 if answer is None:
                     history, facts = self.memory.snapshot()
                     brain = self.brain
@@ -220,7 +263,8 @@ class AssistantController:
                     if cancel.is_set() or self._closed.is_set():
                         continue
                     try:
-                        self.memory.add_turn(text, answer)
+                        if not private_context:
+                            self.memory.add_turn(text, answer)
                     except OSError:
                         self.emit("notice", message="I answered, but couldn't save this conversation to disk.")
                     self.emit("message", role="assistant", text=answer)
@@ -244,13 +288,71 @@ class AssistantController:
                 with self._lock:
                     if self._cancel is cancel:
                         self._busy.clear()
-                        if not failed and not self.voice.busy.is_set():
+                        if not failed and not capture_started and not self.voice.busy.is_set():
                             self.emit("status", state="ready", detail="Type a message or press Talk")
                 self._jobs.task_done()
 
-    def listen_once(self):
+    def listen_once(self, finish_signal=None):
         self.stop(announce=False)
-        self.voice.listen_once()
+        self.voice.listen_once(finish_signal=finish_signal)
+
+    def dictate_once(self):
+        self.stop(announce=False)
+        self.emit('wake_detected', detail='Dictating — words will not run commands')
+        self.voice.listen_once(dictation=True)
+
+    def dictate_current(self, finish_signal=None):
+        self.stop(announce=False)
+        with self._lock:
+            cancel = threading.Event()
+            self._cancel = cancel
+            self._busy.set()
+        def prepare():
+            try:
+                self._begin_target_dictation("current app", cancel, finish_signal)
+            finally:
+                with self._lock:
+                    if self._cancel is cancel:
+                        self._busy.clear()
+        threading.Thread(target=prepare, name="dictation-prepare", daemon=True).start()
+
+    def _begin_target_dictation(self, app, cancel, finish_signal=None):
+        try:
+            binding = self.router.desktop.prepare_dictation(app)
+        except (ValueError, OSError, ImportError) as error:
+            self.emit('notice', message=str(error))
+            return False
+        if cancel.is_set():
+            return False
+        self.emit('wake_detected', detail='Dictation into ' + app)
+        mode = 'at the selected caret' if binding['field']['mode'] == 'selection' else 'at the end of the chosen field'
+        self.emit('notice', message=f'Dictating into {app}, {mode}. Text is inserted literally; nothing is submitted.')
+        self.voice.listen_once(dictation=True, on_dictation=lambda text: self._insert_dictation(binding, text, cancel), finish_signal=finish_signal)
+        return True
+
+    def _insert_dictation(self, binding, text, cancel):
+        def work():
+            from .automation_worker import isolated
+            from .dictation import insert
+            with self._lock:
+                if cancel.is_set() or self._closed.is_set():
+                    return
+                self._busy.set()
+            try:
+                self.emit('status', state='thinking', detail='Inserting dictation')
+                result = isolated(insert, (binding, text), cancel.is_set)
+                if not cancel.is_set():
+                    self.emit('notice', message=result)
+            except (ValueError, OSError, ImportError) as error:
+                if not cancel.is_set():
+                    self.emit('notice', message=str(error))
+                    self.emit('text_preview', title='Dictation was not confirmed — check the app before copying', text=text)
+            finally:
+                with self._lock:
+                    if self._cancel is cancel:
+                        self._busy.clear()
+                        self.emit('status', state='ready', detail='Dictation finished')
+        threading.Thread(target=work, name='dictation-insert', daemon=True).start()
 
     def set_wake_enabled(self, enabled, persist=True):
         self._wake_enabled = bool(enabled)
@@ -298,6 +400,9 @@ class AssistantController:
         self.settings = settings
         self.brain = Brain(settings)
         self.voice.update_settings(settings)
+        self._hotkey.close()
+        if settings.global_voice_shortcut and self._started:
+            self._hotkey.start()
         self._wake_enabled = bool(settings.wake_on_start)
         if self._wake_enabled:
             self.voice.set_wake_enabled(True)
@@ -444,6 +549,7 @@ class AssistantController:
             return
         self._closed.set()
         self._device_watch.close()
+        self._hotkey.close()
         self.stop(announce=False)
         self.voice.close()
         self.router.close()

@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from typing import Callable
+from .capture import listen as capture_phrase, normalize as normalize_audio
 
 
 class _Cancelled(Exception):
@@ -112,6 +113,11 @@ class VoiceService:
         self._output_active = threading.Event()
         self._closed = threading.Event()
         self._listen_request = threading.Event()
+        self._dictation_request = False
+        self._dictation_callback = None
+        self._manual_generation = None
+        self._finish_capture = None
+        self._capture_limit_reached = False
         self._lock = threading.RLock()
         self._speech_queue = queue.Queue()
         self._render_queue = queue.Queue()
@@ -219,7 +225,7 @@ class VoiceService:
         except Exception:
             return []
 
-    def listen_once(self):
+    def listen_once(self, dictation=False, on_dictation=None, finish_signal=None):
         if self._closed.is_set():
             return
         if not self.available:
@@ -227,6 +233,10 @@ class VoiceService:
             return
         self.stop()
         with self._lock:
+            self._manual_generation = self._capture_generation if finish_signal is not None else None
+            self._finish_capture = finish_signal
+            self._dictation_request = bool(dictation)
+            self._dictation_callback = on_dictation
             self._conversation_active = True
             self._listen_request.set()
             self._activity.set()
@@ -235,6 +245,9 @@ class VoiceService:
         with self._lock:
             self._wake_enabled = bool(enabled) and self.available
             self._capture_generation += 1
+            if enabled and self._local_wake_failed:
+                self._local_wake_failed = False
+                self._local_wake = None
             if not enabled:
                 self._followup_until = 0
                 self._conversation_active = False
@@ -296,6 +309,8 @@ class VoiceService:
                         break
             self.busy.clear()
             self._listen_request.clear()
+            self._dictation_request = False
+            self._dictation_callback = None
             self._followup_until = 0
             if not preserve_conversation:
                 self._conversation_active = False
@@ -369,11 +384,15 @@ class VoiceService:
                 continue
             with self._lock:
                 requested = self._listen_request.is_set()
+                dictation = requested and getattr(self, '_dictation_request', False)
+                dictation_callback = self._dictation_callback if dictation else None
                 followup = time.monotonic() < self._followup_until
                 wake = self._wake_enabled
                 generation = self._capture_generation
                 if requested:
                     self._listen_request.clear()
+                    self._dictation_request = False
+                    self._dictation_callback = None
             if not (requested or followup or wake):
                 if self._calibration_request.is_set() or self._meter_request.is_set():
                     self._calibrate()
@@ -381,6 +400,10 @@ class VoiceService:
                 if time.monotonic() - self._last_voice_activity > 60:
                     self._local_wake = None
                 self._status("ready", "Microphone off. Press Talk or type a message.")
+                self._activity.wait(30)
+                continue
+            if wake and self._local_wake_failed and not (requested or followup):
+                self._status("error", "Wake detector unavailable. Press Talk, or switch wake off and on to retry.")
                 self._activity.wait(30)
                 continue
             if requested or followup:
@@ -397,6 +420,15 @@ class VoiceService:
                 transcript = self._capture_and_transcribe(generation, requested, followup)
                 self._microphone_failures = 0
                 if not transcript or not self._capture_valid(generation):
+                    continue
+                self._emit("transcript_final", text=transcript)
+                if self._capture_limit_reached:
+                    self._emit("text_preview", title="Recording limit reached — review before using", text=transcript)
+                    self._conversation_active = False
+                    self._followup_until = 0
+                    continue
+                if dictation:
+                    self._deliver_dictation(transcript, generation, dictation_callback)
                     continue
                 detected, command = strip_wake_word(transcript, str(self._setting("persona", "friday")))
                 if not (requested or followup or detected or self._local_wake_heard):
@@ -428,6 +460,20 @@ class VoiceService:
         if client is not None:
             client.close()
 
+    def _deliver_dictation(self, transcript, generation, callback=None):
+        # Preserve literal text, including wake words and command-like phrases.
+        # The capture token prevents an old result reaching a new request.
+        with self._lock:
+            if not self._capture_valid(generation):
+                return
+            self._conversation_active = False
+            self._await_response_since = self._followup_until = 0
+            if callback is not None:
+                callback(transcript[:8000])
+            else:
+                self._emit('text_preview', title='Dictation — review and copy', text=transcript[:8000])
+                self._status('ready', 'Dictation ready to review; no command was executed.')
+
     def _listen_for_local_wake(self, source, generation):
         from .wake import LocalWake, ReplayStream, model_directory
         if self._local_wake_failed:
@@ -439,7 +485,7 @@ class VoiceService:
                 self._local_wake = LocalWake(self._setting("persona", "friday"), self._setting('wake_sensitivity', 50))
             except Exception:
                 self._local_wake_failed = True
-                self._notice("Local wake detection is unavailable. Install the wake model in Settings or press Talk. Standby audio will not be uploaded.", cooldown=300)
+                self._notice("Local wake detection could not load. Press Talk, or switch wake off and on to retry. Check the bundled wake model in Diagnostics. Standby audio will not be uploaded.", cooldown=300)
                 return False
         self._local_wake.reset()
         while self._capture_valid(generation):
@@ -557,6 +603,11 @@ class VoiceService:
         self._meter_request.set()
         self._activity.set()
 
+    def _observe_capture(self, pcm):
+        # Raw audio drives the gate; suppression must not erase quiet onsets.
+        self._level(pcm)
+        return pcm
+
     def _level(self, pcm):
         now = time.monotonic()
         if now - self._last_level >= .1:
@@ -579,7 +630,7 @@ class VoiceService:
                         return
                     pcm = source.stream.read(320)
                     self._level(pcm)
-                    levels.append(audioop.rms(self._clean_capture(pcm), 2))
+                    levels.append(audioop.rms(pcm, 2))
             if calibrating:
                 levels.sort()
                 self._energy_threshold = max(50, min(10000, int(levels[89] * 1.8)))
@@ -597,10 +648,10 @@ class VoiceService:
         session = None
         try:
             session = StreamingRecognition(self._setting('deepgram_api_key', ''),
-                self._setting('recognition_language', 'en-IN'), self._setting('pause_seconds', .55),
+                self._setting('recognition_language', 'en-IN'), self._setting('pause_seconds', .95),
                 lambda: self._capture_valid(generation),
                 lambda text: self._emit('transcript_partial', text=text))
-            for part in recognizer.listen(source, timeout=7, phrase_time_limit=30, stream=True):
+            for part in self._phrase(recognizer, source, timeout=7, stream=True):
                 session.feed(part.get_raw_data(convert_rate=16000, convert_width=2))
             started = time.monotonic()
             self._status('transcribing', 'Finishing live transcription…')
@@ -617,18 +668,27 @@ class VoiceService:
             if session is not None:
                 session.close()
 
+    def _phrase(self, recognizer, source, timeout=7, stream=False):
+        manual = self._manual_generation == self._capture_generation and self._finish_capture is not None
+        def limit():
+            self._capture_limit_reached = True
+        return capture_phrase(recognizer, source, timeout=60 if manual else timeout,
+            phrase_time_limit=60 if manual else 30, stream=stream,
+            finish=self._finish_capture.is_set if manual else None, on_limit=limit)
+
     def _capture_and_transcribe(self, generation, requested, followup):
+        self._capture_limit_reached = False
         import speech_recognition as sr
         recognizer = sr.Recognizer()
         recognizer.operation_timeout = 12
-        recognizer.pause_threshold = self._setting('pause_seconds', .55)
-        recognizer.non_speaking_duration = min(.3, recognizer.pause_threshold)
+        recognizer.pause_threshold = self._setting('pause_seconds', .95)
+        recognizer.non_speaking_duration = min(.4, recognizer.pause_threshold)
         recognizer.dynamic_energy_threshold = True
         recognizer.energy_threshold = self._energy_threshold
         try:
             with sr.Microphone(device_index=self._microphone_device(), sample_rate=16000, chunk_size=320) as source:
                 source.stream = _InterruptibleStream(source.stream, lambda: self._capture_valid(generation),
-                    self._clean_capture if self._setting('noise_suppression', True) else None)
+                    self._observe_capture)
                 if self._barge_frames:
                     from .wake import ReplayStream
                     source.stream = ReplayStream(source.stream, self._barge_frames)
@@ -647,10 +707,10 @@ class VoiceService:
                         self._notice('Local transcription needs the English wake model. Install it from Settings.')
                         return ''
                     if decoder is None:
-                        audio = recognizer.listen(source, timeout=7 if requested or self._local_wake_heard else 1, phrase_time_limit=30)
+                        audio = self._phrase(recognizer, source, timeout=7 if requested or self._local_wake_heard else 1)
                     else:
                         parts, words, previous = [], [], ''
-                        for part in recognizer.listen(source, timeout=7 if requested or self._local_wake_heard else 1, phrase_time_limit=30, stream=True):
+                        for part in self._phrase(recognizer, source, timeout=7 if requested or self._local_wake_heard else 1, stream=True):
                             raw = part.get_raw_data(convert_rate=16000, convert_width=2)
                             parts.append(raw)
                             if decoder.AcceptWaveform(raw):
@@ -674,6 +734,7 @@ class VoiceService:
         if not self._capture_valid(generation):
             raise _Cancelled()
         self._status("transcribing", "Recognizing speech…")
+        audio = normalize_audio(audio, process=self._clean_capture if self._setting('noise_suppression', True) else None)
         transcription_started = time.monotonic()
         try:
             provider = self._setting('stt_provider', 'auto')
@@ -692,10 +753,10 @@ class VoiceService:
                 language_args = {} if language == 'auto' else {'language':language}
                 try:
                     if self._groq_stt is None:
-                        self._groq_stt = Groq(api_key=key, timeout=8, max_retries=0)
+                        self._groq_stt = Groq(api_key=key, timeout=15, max_retries=0)
                     result = self._groq_stt.audio.transcriptions.create(
                             file=("command.wav", audio.get_wav_data(convert_rate=16000), "audio/wav"),
-                            model="whisper-large-v3-turbo", **language_args, response_format="verbose_json",
+                            model=self._setting("recognition_model", "whisper-large-v3"), **language_args, response_format="verbose_json",
                             temperature=0,
                             prompt="FRIDAY, Alfred, Spotify, Discord, WhatsApp, Visual Studio Code, Steam, Chrome, Notepad, calculator.")
                     self.metrics.record('transcription_ms', (time.monotonic()-transcription_started)*1000)
@@ -703,7 +764,11 @@ class VoiceService:
                     if segments and all(float(s.get("no_speech_prob", 0)) > 0.75 for s in segments):
                         return ""
                     return str(getattr(result, "text", "")).strip()
-                except Exception:
+                except Exception as error:
+                    if type(error).__name__ == "AuthenticationError":
+                        self._notice("Groq rejected your API key. Update it in Settings before trying voice again.", cooldown=60)
+                        self._stt_retry_after = time.monotonic() + 30
+                        return ""
                     self._stt_retry_after = time.monotonic() + 30
                     if provider == 'groq':
                         self._notice('Groq recognition is unavailable. Your recording was not sent to another service.', cooldown=60)

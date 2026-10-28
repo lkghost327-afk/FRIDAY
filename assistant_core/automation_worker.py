@@ -119,11 +119,20 @@ def automate(target, app, operation, text):
                 if result is not None:
                     return result
         import win32gui
-        if operation != 'list' and win32gui.IsIconic(target['hwnd']):
+        if operation not in {'list', 'read', 'inspect'} and win32gui.IsIconic(target['hwnd']):
             # Navigation is an explicit request to work in this app. Its controls
             # are often absent from UIA while the window is minimized.
             win32gui.ShowWindow(target['hwnd'], 9)
         window = Desktop(backend='uia').window(handle=target['hwnd']).wrapper_object()
+        if operation in {'read', 'inspect'}:
+            from .app_text import accessible_text
+            result = accessible_text(window)
+            if operation == 'inspect':
+                names = [str(c.element_info.name)[:100] for c in window.descendants(control_type='Button', depth=6)
+                         if c.is_visible() and c.is_enabled() and c.element_info.name]
+                result += '\nExact accessible button labels: ' + ', '.join(dict.fromkeys(names[:40]))
+            validate(target)
+            return result
         if operation == 'navigate':
             return navigate(target, window, app, text)
         if operation == 'list':

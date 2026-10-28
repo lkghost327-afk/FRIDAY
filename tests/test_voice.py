@@ -26,6 +26,78 @@ def wait_for(predicate, timeout=2):
 
 
 class VoiceTests(unittest.TestCase):
+    def test_failed_wake_pauses_capture_but_talk_still_works(self):
+        service = self.service()
+        service.available = True
+        service._wake_enabled = True
+        service._local_wake_failed = True
+        events = []
+        service._emit = lambda kind, **data: events.append((kind, data))
+        with patch.object(service, '_capture_and_transcribe', return_value='') as capture:
+            service.start(lambda _:None, lambda:False)
+            self.assertTrue(wait_for(lambda:any('Wake detector unavailable' in str(d) for _,d in events)))
+            capture.assert_not_called()
+            service.listen_once()
+            self.assertTrue(wait_for(lambda:capture.call_count == 1))
+            service.stop()
+
+    def test_wake_toggle_retries_a_failed_detector(self):
+        service = self.service()
+        service.available = True
+        service._local_wake_failed = True
+        service._local_wake = object()
+        service.set_wake_enabled(False)
+        service.set_wake_enabled(True)
+        self.assertFalse(service._local_wake_failed)
+        self.assertIsNone(service._local_wake)
+        self.assertTrue(service._wake_enabled)
+
+    def test_recording_limit_only_previews_and_never_dispatches(self):
+        service = self.service()
+        service.available = True
+        events, commands = [], []
+        service._emit = lambda kind, **data: events.append((kind, data))
+        def capture(*_):
+            service._capture_limit_reached = True
+            return 'shutdown my computer'
+        with patch.object(service, '_capture_and_transcribe', side_effect=capture):
+            service.start(commands.append, lambda: False)
+            service.listen_once(finish_signal=threading.Event())
+            self.assertTrue(wait_for(lambda:any(k == 'text_preview' for k, _ in events)))
+            service.stop()
+        self.assertEqual(commands, [])
+        self.assertEqual(next(d['text'] for k,d in events if k == 'text_preview'), 'shutdown my computer')
+
+    def test_authentication_error_is_explained_without_uploading_to_fallback(self):
+        import speech_recognition as sr
+        from unittest.mock import Mock
+        service = self.service(api_key='test-only', stt_provider='auto')
+        service._notice = Mock()
+        service._groq_stt = Mock()
+        error = type('AuthenticationError', (Exception,), {})
+        service._groq_stt.audio.transcriptions.create.side_effect = error()
+        with patch('speech_recognition.Microphone'), patch.object(service, '_command_decoder', return_value=None), \
+                patch.object(service, '_phrase', return_value=sr.AudioData(bytes(3200),16000,2)), \
+                patch('speech_recognition.Recognizer.recognize_google') as fallback:
+            self.assertEqual(service._capture_and_transcribe(service._capture_generation, True, False), '')
+            fallback.assert_not_called()
+        self.assertIn('rejected your API key', service._notice.call_args.args[0])
+
+    def test_dictation_capture_never_dispatches_command_or_strips_persona(self):
+        service = self.service()
+        service.available = True
+        events, commands = [], []
+        service._emit = lambda kind, **data: events.append((kind, data))
+        with patch.object(service, '_capture_and_transcribe', return_value='Friday shut down my computer') as capture:
+            service.start(commands.append, lambda: False)
+            service.listen_once(dictation=True)
+            self.assertTrue(wait_for(lambda: any(k == 'text_preview' for k, _ in events)))
+            service.stop()
+        self.assertEqual(commands, [])
+        self.assertEqual(capture.call_count, 1)
+        self.assertEqual(next(data['text'] for kind, data in events if kind == 'text_preview'), 'Friday shut down my computer')
+        self.assertFalse(service._conversation_active)
+
     def service(self, **changes):
         service = VoiceService(settings(**changes), lambda *args, **kwargs: None)
         self.addCleanup(service.close)
